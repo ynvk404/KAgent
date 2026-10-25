@@ -168,6 +168,9 @@ class ReadHTTPObservation:
     def range_metadata(self, args: dict[str, Any]) -> dict[str, Any]:
         return {}
 
+    def region_start(self, args: dict[str, Any], text: str) -> tuple[int, dict[str, Any]]:
+        return args["start_char"], {}
+
     def validate_args(self, args: dict[str, Any]) -> None:
         import re
         if (set(args) != {"observation_id", "start_char", "max_chars"}
@@ -249,6 +252,7 @@ class ReadHTTPObservation:
         item = policy.observations._items[self.observation_id(args)]
         assert item.retained_hash is not None
         text = item.body.decode(errors="replace")
+        region_start, lookup = self.region_start(args, text)
         details = item.source_details or {}
         provenance = {key: details[key] for key in (
             "request_mode", "baseline_request_ref", "body_representation", "response_cap_unit"
@@ -257,7 +261,7 @@ class ReadHTTPObservation:
         # Use the same lab HTTP outbound analysis guard as native capture. The
         # envelope stays small and body offsets describe only retained text.
         def encode(size):
-            region = read_region(text, args["start_char"], size)
+            region = read_region(text, region_start, size)
             body = region.pop("content")
             header = json.dumps({**self.range_metadata(args), **provenance, "observation_id": item.id, "retained_hash": item.retained_hash,
                 "status": item.status, "elapsed_ms": item.elapsed_ms, "request_hash": item.request_hash,
@@ -265,7 +269,7 @@ class ReadHTTPObservation:
                 "offset_unit": "unicode_characters", "complete": item.complete,
                 "adapter_truncated": item.truncated, "start_char": region["actual_start"],
                 "end_char": region["actual_end"], "source_chars": region["total_length"],
-                "next_start_char": region["next_offset"]}, ensure_ascii=False) + "\n"
+                "next_start_char": region["next_offset"], **lookup}, ensure_ascii=False) + "\n"
             return header + body, len(header), region
         low, high = 0, args["max_chars"]
         best = encode(0)
@@ -302,22 +306,29 @@ class ReadDiscoverySource(ReadHTTPObservation):
                 "get_source returns metadata, not content; read_http_observation requires Candidate/Attempt ownership. "
                 "Requires current scope, source integrity, HTTP skill capability and fresh range permission. No HTTP is sent. "
                 "Selection is unnecessary and grants no rights. Reading grants no ownership, replay authority, coverage or terminal evidence. "
+                "Optional find_text locates one literal in the existing retained body at/after start_char and returns bounded surrounding context. "
+                "No match concerns only retained text, never absence of endpoints. No JavaScript execution or automatic extraction. "
                 "Use next_start_char; do not repeat failed reads, refetch or infer unseen content. Continue from other observed sources if unavailable.")
 
     def schema(self) -> dict[str, Any]:
         schema = super().schema()
         schema["properties"]["discovery_source_id"] = {"type": "string", "pattern": "^ds_[0-9a-f]{64}$"}
         del schema["properties"]["observation_id"]
+        schema["properties"]["find_text"] = {"type": "string", "minLength": 1, "maxLength": 80,
+            "description": "Optional case-sensitive literal lookup in retained text, not regex or retrieval. Returns at most the existing 2000-character envelope with context; no new HTTP."}
         schema["required"] = ["discovery_source_id", "start_char", "max_chars"]
         return schema
 
     def permission_hints(self, args: dict[str, Any]) -> PermissionHints:
         return {"noSessionCache": True, "riskTier": "high-impact",
-                "cacheKey": f"discovery:{args.get('discovery_source_id')}:{args.get('start_char')}:{args.get('max_chars')}"}
+                "cacheKey": f"discovery:{args.get('discovery_source_id')}:{args.get('start_char')}:{args.get('max_chars')}:{args.get('find_text', '')}"}
 
     def validate_args(self, args: dict[str, Any]) -> None:
         import re
-        if (set(args) != {"discovery_source_id", "start_char", "max_chars"}
+        if (not {"discovery_source_id", "start_char", "max_chars"} <= set(args)
+                or set(args) - {"discovery_source_id", "start_char", "max_chars", "find_text"}
+                or ("find_text" in args and (not isinstance(args["find_text"], str)
+                    or not 1 <= len(args["find_text"]) <= 80))
                 or not isinstance(args["discovery_source_id"], str)
                 or not re.fullmatch(r"ds_[0-9a-f]{64}", args["discovery_source_id"])
                 or type(args["start_char"]) is not int or args["start_char"] < 0
@@ -325,6 +336,15 @@ class ReadDiscoverySource(ReadHTTPObservation):
             raise ValueError('use an exact ds_ source ID and bounded integer character offsets; '
                              'copy the ID from workflow(action="list", view="sources"), '
                              'never convert an obs_ ID to ds_')
+
+    def region_start(self, args: dict[str, Any], text: str) -> tuple[int, dict[str, Any]]:
+        if "find_text" not in args:
+            return super().region_start(args, text)
+        # Called only after the normal receipt, provenance, scope, secret and
+        # per-read permission checks. Search cannot fetch beyond retained bytes.
+        match = text.find(args["find_text"], args["start_char"])
+        return (max(args["start_char"], match - 128) if match >= 0 else len(text),
+                {"literal_match": match >= 0, "match_start_char": match if match >= 0 else None})
 
     def observation_id(self, args: dict[str, Any]) -> str:
         ref = self.agent.workflow.discovery_sources[args["discovery_source_id"]].retained_ref

@@ -115,7 +115,9 @@ sanitized input, including after resume or compaction.
 For a new expert attempt: complete current prerequisites → read the current
 skill → prepare primary/supplementary requests and roles → successfully call
 `start_validation` → probe → evidence → result. Whole-target work requires
-Workflow completion of Recon, Enumeration and Input Analysis; Direct and
+Workflow completion of Recon and Enumeration, a canonical analysis handoff and
+a compatible linked analyzed input. Independent blocked inputs keep the global
+phase/objective incomplete; they do not block an admitted Candidate. Direct and
 candidate-validation retain their own admission contracts.
 
 Prepare associations from the existing Candidate, inventory and context before

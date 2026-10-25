@@ -75,6 +75,6 @@ def generic_admission(candidate: Candidate, state: WorkflowState, registry: Regi
         return "generic endpoint origin differs from candidate"
     if not policy.engagement.is_in_scope(origin):
         return "generic candidate outside runtime scope"
-    if objective.mode == "whole_target" and "input_analysis" not in state.completed_phases():
+    if objective.mode == "whole_target" and not {"recon", "enumeration"} <= state.completed_phases():
         return "generic candidate work requires completed discovery phases"
     return None

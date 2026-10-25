@@ -450,14 +450,12 @@ def test_web_enumeration_stop_conditions_prevent_scope_creep():
     stop_block = collapse_ws(body[body.index("### Stop conditions"):])
 
     for phrase in [
-        "known routes and resources from application links, "
-        "documentation, and JS have been collected;",
-        "forms and parameter-bearing endpoints are inventoried;",
-        "API entry points are identified;",
-        "focused content discovery no longer produces useful new "
-        "routes;",
-        "further enumeration would become high-volume without a clear "
-        "objective.",
+        "useful request fields from the selected sources are inventoried;",
+        "valuable observed clues are followed within bounds or have a specific omission reason;",
+        "API entry points and unresolved API-base/auth limitations are distinguished;",
+        "further work has low expected information gain or would exceed existing bounds;",
+        "canonical input records, inventory, source obligations and coverage agree.",
+        "Optional content discovery need not run",
         "Do not escalate into full crawling, large wordlist sweeps "
         "across multiple hosts, GraphQL schema fuzzing, or "
         "payload-based probing.",

@@ -103,6 +103,7 @@ class ExecutionPolicy:
         self._denied: set[tuple[str, str]] = set()
         self._pending: set[str] = set()
         self.input_questions: dict[str, str | None] = {}
+        self.input_question_texts: dict[str, str] = {}
         self.journal: Path | None = None
         self.session_id: str | None = None
         self.generic_validation: Any = None
@@ -187,6 +188,7 @@ class ExecutionPolicy:
         """Explicit operator action; never called from tool arguments."""
         self._denied.clear()
         self.input_questions.clear()
+        self.input_question_texts.clear()
         self.revision += 1
         self._clear_reviews()
 

@@ -83,6 +83,12 @@ async def test_each_phase_is_required_by_runtime_and_planner_without_mutation(tm
     elif fault == 'noncanonical': marker.artifact_ref = 'artifacts/not-canonical.md'
     else: (tmp_path / marker.artifact_ref).write_text('')
     before = tool.state.to_dict()
+    if phase == "input_analysis" and fault == "missing":
+        # Per-input handoff deliberately needs the canonical artifact and analyzed
+        # linkage, not a global completion marker for independent inventory.
+        assert json.loads(await action(tool, "start_validation", candidate_id=candidate['id']))['ok']
+        assert "input_analysis" not in tool.state.completed_phases()
+        return
     assert 'WHOLE_TARGET_VALIDATION_PREREQUISITE' in await action(tool, 'start_validation', candidate_id=candidate['id'])
     assert tool.state.to_dict() == before and tool.active_attempt is None
     assert not tool.state.attempts and not tool.state.evidence_recovery

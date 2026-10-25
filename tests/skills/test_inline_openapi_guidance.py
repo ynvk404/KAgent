@@ -16,7 +16,7 @@ import pytest
 from src.skills.artifacts import completion_artifact_path
 from src.workflow.state import WorkflowObjective
 from tests.helpers.burp_selection import make_runtime
-from tests.helpers.discovery_calls import execute, attribution
+from tests.helpers.discovery_calls import attribution, execute
 from tests.skills.test_web_enumeration import read_skill
 
 ORIGIN = 'http://catalog.test'
@@ -77,8 +77,17 @@ def initializer(binding: str) -> str:
     ('record_input', 'inventory', 'without inputs', 'record_endpoint', 'provenance', 'request-context'),
     ('set_source_disposition', 'partial', 'blocked', 'source_limitations', 'source_bounds', 'complete_skill'),
 ])
-def test_guidance_covers_inline_contract_without_layout_dependency(concepts):
-    _, body, _ = read_skill()
+async def test_guidance_covers_inline_contract_without_layout_dependency(concepts):
+    from src.permission.permission import AlwaysAllow
+    from src.skills.registry import Registry
+    from src.tools.skills.skill_file import ReadSkillFileTool
+    _, body, path = read_skill()
+    assert 'read_skill_file(skill="web-enumeration", path="source-reference.md")' in body
+    skills = Registry()
+    skills.load_dir(path.parent.parent)
+    reference = await ReadSkillFileTool(skills).run(
+        {'skill': 'web-enumeration', 'path': 'source-reference.md'}, None, AlwaysAllow())
+    body += str(reference)
     # Paragraphs may be rewrapped or reformatted; only semantic anchors matter.
     text = ' '.join(body.replace('`', '').lower().split())
     assert all(concept in text for concept in concepts)

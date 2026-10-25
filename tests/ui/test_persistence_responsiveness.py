@@ -218,9 +218,13 @@ async def measure(boundary: str, control: bool, root: Path, monkeypatch) -> Meas
     if not control or boundary == "finding_worker":
         assert len(held_ms) == 1 and held_ms[0] >= DELAY * 900
     assert len(beats) >= 4
+    # Measure this operation and its recovery, not an unrelated startup gap.
+    # Anchor at operation entry so blocking before the first real heartbeat
+    # still fails. Keep all raw heartbeat timestamps in the diagnostic timeline.
+    boundaries = [stamps["start"], *(beat for beat in beats if beat > stamps["start"])]
     result = Measurement(boundary, control,
         (stamps["operation_end"] - stamps["start"]) * 1000,
-        max(b - a for a, b in zip(beats, beats[1:])) * 1000,
+        max(b - a for a, b in zip(boundaries, boundaries[1:])) * 1000,
         sum(stamps["start"] < b < stamps["operation_end"] for b in beats),
         (stamps["cancel_requested"] - stamps["esc_sent"]) * 1000,
         (stamps["cancel_requested"] - stamps["start"]) * 1000,

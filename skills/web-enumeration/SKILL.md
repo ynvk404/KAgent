@@ -68,13 +68,37 @@ Discovery stays on the active origin, is bounded, and requires
 permission. Do not run generic-shell `ffuf`, `gobuster`, or `dirsearch`
 automatically.
 
-Use native `content_discovery` only for an actual path gap; no additional
-probe is required when known/documented/captured inventory is sufficient.
 External scanner integration is unavailable; do not substitute shell scan loops.
 
 Execution rule: substitute the real target into commands before running them.
 Never write literal placeholders such as `<TARGET>`, `<HOST>`, or `<endpoint>`
 to files. If the target or scope is unclear, ask once before running commands.
+
+## Choose the next discovery question
+
+Sections 2–6 are a source menu, not a checklist or required order. Select the
+next discovery question from current evidence: what missing method, request
+field, media type, API base or access limitation would a source clarify?
+Compare expected information gain with request, retained-reading and LLM cost.
+Reuse visible evidence first; choose the branch most likely to add useful
+request structure. No branch, Swagger document or bundle set is mandatory.
+
+| Signal already observed | Useful branch | Bounded outcome |
+|---|---|---|
+| HTML navigation/form/action | Extract fields and follow a useful same-origin link | Form/request records, or a specific unreadable portion |
+| Captured HTTP traffic | Reuse available request structure | Inputs with checked request provenance; no replay authority inferred |
+| API definition/initializer reference | Read visible operations/schema/security | Documented inputs, with unknown reachability/auth preserved |
+| SPA scripts, imports or network call sites | Inspect a relevant retained call-site window | Method/field clues; unresolved API-base/config binding stays unknown |
+| Concrete route gap with no sufficient exposed source | Optional content_discovery | Calibrated paths, not inferred body schemas |
+
+After a bounded review, ask what new request structure was gained. Switch
+branches or hand off when further reading only repeats metadata/vendor text.
+Keep valuable unpursued clues and their omission reason; do not declare them
+absent. Register evidenced inputs immediately, including arrays: they do not
+require a scalar sink or a vulnerability hypothesis. Auth requirements belong
+in discovery limitations; Input Analysis decides whether a real prerequisite
+prevents triage. Do not send a documented create/update operation just to prove
+its fields exist or obtain a receipt.
 
 ## Target identifier
 
@@ -139,54 +163,40 @@ inventory and account for coverage before `complete_skill`.
 
 ## Large responses: bounded reading, then move on
 
-Choose capture bounds for the intended source review before the first fetch,
-within existing HTTP limits; a tiny prefix may omit the relevant reference.
-A response truncation marker or context-guard omission is a strategy signal.
-Do not repeatedly fetch the same large resource, increase `max_response_bytes`,
-or add empty queries/cache-busters to obtain the whole blob. Check status and
-Content-Type first: HTML at a guessed Swagger URL is not a JSON specification.
-Use already visible input/schema/link clues and record them immediately.
+Choose capture bounds for the intended review before the first fetch within HTTP
+limits. Do not repeatedly fetch the same large resource, increase caps or use
+cache-busters after truncation. HTML at a guessed Swagger URL is not a JSON spec.
+Reuse visible content; local artifact searches retain existing read permissions,
+at most 40 matches and 4,000 output characters. The raw ObservationStore bytes are not a general discovery reader or an automatic read_tool_result cache.
 
-Reuse content already seen or search a retained local artifact under existing
-read permissions, with at most 40 matches and 4,000 output characters.
-Native HTTP returns a bounded response
-inline; its raw ObservationStore bytes are not a general discovery reader or
-an automatic `read_tool_result` cache. Context omission and response truncation
-are different: retained response completeness, the ranges actually read and the
-content still in context are separate. `complete=true` does not mean omitted
-text is still visible. Content-Length is not the number of bytes inspected.
-`workflow(action="get_source", discovery_source_id=...)` returns metadata only.
-`workflow(action="list", view="sources")` shows the source request's method and
-`document_url`, plus status, media type and retained size when its observation
-is available. Check these before choosing an ID: a redirect, HTML Swagger UI,
-JS initializer and JSON specification are different sources. A filename or
-media type alone does not establish OpenAPI contents; inspect the retained body.
-Copy `next_discovery_cursor` into `discovery_cursor` for the same view/filter,
-never `cursor`. Reuse trustworthy metadata/body already in context; list only
-missing metadata and read only a missing range, not every observation again.
-After a stale-cursor error, restart without `discovery_cursor`;
-new sources may change the page set. Never guess a source ID to find a new response.
-In Whole-target mode, read retained HTTP discovery content with
-`read_discovery_source` using that exact `ds_` ID, `start_char`, and
-`max_chars` ≤2,000; follow `next_start_char`.
-Each range requires current scope, provenance, HTTP capability and permission;
-selection grants no access. The reader sends no HTTP, reads only the existing
-≤64 KiB body, and grants no Candidate/Attempt ownership or terminal evidence.
-A newly referenced source does not require refetching its parent. Do not fetch
-again, increase caps or cache-bust just because context lacks a part that was
-already retained. `read_http_observation` keeps its validation
-ownership contract: do not use it for an unowned discovery observation, create
-a Candidate/validation attempt to gain read rights, or infer authority from a
-source ID. If content is unavailable, evicted, outside limits or unreadable
-under current rights, record that limitation and work with known inputs.
-Do not repeat an identical rejected read. Inspect another observed form,
-request or call site when useful; Swagger is not a prerequisite for Enumeration.
-Do not raise the bound or restart retrieval.
-Use `content_discovery` only for an actual path gap, not to download a blob.
-Partial review is sufficient for a bounded inventory; do not make complete
-large-resource ingestion a prerequisite for handoff. Once the known input
-surface and coverage are accounted for, write the inventory and transition to
-`web-input-analysis`, retaining unresolved source limitations.
+Retained response completeness, ranges actually read and content still in context
+are separate. complete=true does not restore omitted text. Content-Length is not
+the number of bytes inspected. list(view="sources") supplies method, document_url,
+status/media and retained size; get_source is metadata only. A redirect, Swagger
+UI, initializer and JSON definition are different sources. Use known metadata;
+list only missing IDs, never guess or convert obs_ to ds_. For pagination copy
+next_discovery_cursor into discovery_cursor, never cursor; restart a stale cursor
+without it. Do not re-read every observation.
+
+Read only missing retained ranges with read_discovery_source, exact ds_ ID,
+start_char and max_chars ≤2,000. Follow next_start_char: metadata shares this
+output cap, so max_chars is not the returned body length. Optional find_text
+performs one literal lookup within retained text, returning bounded call-site
+context, with no HTTP. Prefer a meaningful API/method/field clue over walking
+vendor prefixes; a miss proves nothing about uncaptured content. Use the actual
+returned range, never claim the whole source was reviewed.
+
+Each read requires current scope, provenance, HTTP capability and permission;
+selection grants no access. It reads only the existing ≤64 KiB body and grants
+no Candidate/Attempt ownership or terminal evidence. read_http_observation keeps
+its validation ownership contract: do not use it for an unowned discovery observation or create a Candidate/validation attempt to gain read rights.
+Do not fetch again, increase caps or cache-bust for omitted retained material;
+Shell HTTP is not a truncation fallback. If unavailable, evicted, outside limits
+or unreadable, retain the limitation and continue known inputs. Do not repeat
+an identical rejected read. Swagger is not a prerequisite for Enumeration.
+Do not raise the bound or restart retrieval. Content discovery answers a path
+gap, not blob retrieval. Partial review is sufficient; hand off inventory and
+coverage while retaining unresolved source limitations.
 
 ## 1. Build the target baseline
 
@@ -203,15 +213,7 @@ never copy an example origin or path as an authorization declaration.
 If recon output is unavailable, perform one lightweight request:
 
 ```json
-{
-  "tool": "http",
-  "arguments": {
-    "method": "GET",
-    "url": "/",
-    "phase": "recon",
-    "max_response_bytes": 8192
-  }
-}
+{"tool":"http","arguments":{"method":"GET","url":"/","phase":"recon","max_response_bytes":8192}}
 ```
 
 Record the API style only when it is already apparent from recon or this
@@ -221,43 +223,19 @@ observation only determines which enumeration steps are relevant.
 ## 2. Enumerate routes and endpoints from known sources
 
 Prefer routes the application already exposes before guessing paths.
-Check high-signal discovery files first — skip any of these already recorded
-with a definitive result in `artifacts/recon/<target>/summary.md`:
+For a navigation/metadata gap, consider relevant high-signal discovery files;
+skip those already recorded with a definitive result in `artifacts/recon/<target>/summary.md`:
 
 ```json
-{
-  "tool": "http",
-  "arguments": {
-    "method": "GET",
-    "url": "/robots.txt",
-    "phase": "recon",
-    "max_response_bytes": 8192
-  }
-}
+{"tool":"http","arguments":{"method":"GET","url":"/robots.txt","phase":"recon","max_response_bytes":8192}}
 ```
 
 ```json
-{
-  "tool": "http",
-  "arguments": {
-    "method": "GET",
-    "url": "/sitemap.xml",
-    "phase": "recon",
-    "max_response_bytes": 8192
-  }
-}
+{"tool":"http","arguments":{"method":"GET","url":"/sitemap.xml","phase":"recon","max_response_bytes":8192}}
 ```
 
 ```json
-{
-  "tool": "http",
-  "arguments": {
-    "method": "GET",
-    "url": "/.well-known/security.txt",
-    "phase": "recon",
-    "max_response_bytes": 8192
-  }
-}
+{"tool":"http","arguments":{"method":"GET","url":"/.well-known/security.txt","phase":"recon","max_response_bytes":8192}}
 ```
 
 Parse the landing page for internal links, form actions, and script sources:
@@ -298,15 +276,7 @@ Reuse retained HTML first. If a previously linked `/login` page has not been
 collected, a bounded fetch looks like this:
 
 ```json
-{
-  "tool": "http",
-  "arguments": {
-    "method": "GET",
-    "url": "/login",
-    "phase": "recon",
-    "max_response_bytes": 8192
-  }
-}
+{"tool":"http","arguments":{"method":"GET","url":"/login","phase":"recon","max_response_bytes":8192}}
 ```
 
 For each form, record:
@@ -345,15 +315,7 @@ Choose only unresolved paths that fit the observed application, such as
 Do not run them as a blind batch. For example, retrieve a relevant spec once:
 
 ```json
-{
-  "tool": "http",
-  "arguments": {
-    "method": "GET",
-    "url": "/openapi.json",
-    "phase": "recon",
-    "max_response_bytes": 8192
-  }
-}
+{"tool":"http","arguments":{"method":"GET","url":"/openapi.json","phase":"recon","max_response_bytes":8192}}
 ```
 
 If a Swagger/OpenAPI document is found, parse documented routes, methods,
@@ -367,77 +329,31 @@ do not fetch a specification again merely to list its paths.
 
 ### Inline OpenAPI in Swagger UI
 
-Inspect already visible Swagger UI HTML and its retained initializer before
-guessing another spec URL. A definition can be a literal object supplied to
-`SwaggerUIBundle({spec: ...})`, or passed through `options.swaggerDoc`, an
-intermediate variable, and `swaggerOptions.spec`. Follow only the visible
-literal bindings to the object containing `openapi` and `paths`. A separate
-JSON download is not required for an inline definition. Swagger UI `url` and
-`urls[].url` identify definition-download locations; `servers[].url` identifies
-an API base, not a spec URL. A configured inline `spec` can supersede `url`;
-do not fetch that URL merely because it appears beside an inline definition.
-
-URL-only extraction from HTML/JS does not enumerate an embedded `paths`
-object. No extracted URLs, or a `401`/`403` from an API base, does not establish
-that documented operations are absent. Retain the distinction between a
-documented operation, an observed response at a particular URL/method,
-reachability of that operation, and authenticated access. A successful UI
-page response does not establish API-operation reachability either.
-
-Review the visible request syntax without executing JavaScript, `eval`,
-deobfuscation, or resolving computed/dynamic values. Enumerate every visible
-`paths` method, including operations with no parameters. Read path-item and
-operation parameters (name/location, type and required state), operation
-overrides, and `requestBody.content` media types and schema fields. Preserve
-unresolved `$ref`, truncated definitions and unseen fields as limitations;
-never invent missing operations or request fields.
-Treat familiar product endpoints from prior knowledge as hypotheses for bounded
-in-scope verification, never as operations observed in this specification.
-Read applicable document `security` and operation overrides, including
-`security: []`, alongside `components.securitySchemes`. Bearer/JWT declarations describe documented
-security, not available credentials or successful authentication; a scheme
-definition alone does not apply it to every operation. Never copy token values.
-
-Apply `servers` precedence from operation to path-item to document. Append
-the operation path to the selected API-base path; do not drop the base prefix
-by resolving a leading `/` as a new root. Resolve relative server URLs using
-the actual document location and known UI base context; when an inline
-definition's relative base is ambiguous, record that uncertainty rather than
-inventing a spec URL. Check scheme, host and effective port against exact
-authorized scope. An off-origin server is an external documentation clue,
-not authority to request it or rebase its operations onto the active target.
-Unresolved server variables remain limitations.
+Inspect retained Swagger UI HTML/initializer before guessing definition URLs.
+An inline `spec` can supersede `url`; API `servers` are not definition URLs.
+When this branch needs inline binding, relative API-base/server precedence,
+security inheritance/overrides, unresolved `$ref` or selected-source dispositions,
+read the conditional reference with
+`read_skill_file(skill="web-enumeration", path="source-reference.md")`.
+It includes literal/intermediate bindings; never execute JavaScript or guess
+computed values. Preserve unresolved API-base/auth uncertainty and exact origin.
+No definition, authenticated access or whole-document review is implied by 200 HTML.
 
 ### Record documentation and retain attribution
 
-Read visible HTML/JSON/JS yourself under the bounded-reading rules above.
-There is no automatic HTML/OpenAPI extraction action. Never execute JavaScript
-or register a copied object as a replacement authoritative source.
-Runtime retains Discovery Sources for traceability; an unselected pending
-source is not a mandatory backlog. Reuse known metadata; use `list` sources or
-`get_source` only when an exact reference/hash or limitation is missing.
-There is no required select_source → get_source → processing sequence for each
-response. Select a source only for deliberate further review, not to tidy the
-frontier. Recording an input never selects or dispositions its source.
+There is no automatic HTML/OpenAPI extraction action. Do not execute JavaScript
+or register a copied object as a replacement authoritative source. An unselected
+pending source is not a mandatory backlog. There is no required select_source →
+get_source → processing sequence: select only for deliberate further review,
+`get_source` only when exact metadata is missing. Recording an input never
+selects or dispositions its source. Use the bounded reader contract above.
 
 For each known request field, use `record_input` incrementally under the
 active whole-target objective, reusing returned input IDs. For example, only
 if this method/base/path/field is actually documented on the active origin:
 
 ```json
-{
-  "tool": "workflow",
-  "arguments": {
-    "action": "record_input",
-    "method": "POST",
-    "endpoint": "/service/v4/widgets",
-    "parameter": "label",
-    "location": "json",
-    "input_type": "string",
-    "content_type": "application/json",
-    "sample_payload": "{\"label\":\"{INJECTION_POINT}\"}"
-  }
-}
+{"tool":"workflow","arguments":{"action":"record_input","method":"POST","endpoint":"/service/v4/widgets","parameter":"label","location":"json","input_type":"string","content_type":"application/json","sample_payload":"{\"label\":\"{INJECTION_POINT}\"}"}}
 ```
 
 Do not manufacture a dummy input for an operation without request fields.
@@ -473,21 +389,10 @@ wildcard/template authority. An unexpected path does not prove an endpoint works
 `products`. If an input is wrong, use the existing disposition/correction and
 replacement flow with the actual evidence; never rewrite history or fake a ref.
 
-For a selected source, use `set_source_disposition` with its real
-`discovery_source_id` and `retained_ref`. Mark `processed` only after the
-complete visible source has actually been reviewed; unsupported or dynamic JS
-is not `not_applicable` or proof of zero operations. Use `partial` or
-`blocked` with `source_reason` and `source_limitations` for missing/truncated,
-dynamic, inaccessible or unsupported portions. Only acknowledge an actual
-bounded stop with `acknowledge_bounded_stop=true`, `source_disposition="partial"`,
-a reason, limitations and `source_bounds` containing the real limits applied
-(for example `max_bytes` or `max_operations`); never invent bounds to close a
-source. Selected unresolved sources still block completion. Source disposition is
-not `complete_skill`: satisfy the current frontier, coverage and artifact
-gates in step 7 without claiming unperformed work as `performed`. On Continue,
-preserve historical extraction IDs, provenance, content identity and bounds;
-continue selected unresolved reviews with readable material or an honest
-limitation. Persisted metadata never restores read or execution authority.
+Selected unresolved sources still block completion. Use set_source_disposition
+with actual IDs/retained_ref, source_limitations and real source_bounds; never
+invent bounds or claim processed for unread content. The conditional source-reference.md
+preserves partial/blocked and acknowledge_bounded_stop contracts.
 
 If a GraphQL endpoint is identified, record:
 
@@ -500,19 +405,7 @@ A minimal check may be used only to determine whether introspection is
 enabled:
 
 ```json
-{
-  "tool": "http",
-  "arguments": {
-    "method": "POST",
-    "url": "/graphql",
-    "phase": "recon",
-    "max_response_bytes": 8192,
-    "headers": {
-      "Content-Type": "application/json"
-    },
-    "body": "{\"query\":\"{__schema{types{name}}}\"}"
-  }
-}
+{"tool":"http","arguments":{"method":"POST","url":"/graphql","phase":"recon","max_response_bytes":8192,"headers":{"Content-Type":"application/json"},"body":"{\"query\":\"{__schema{types{name}}}\"}"}}
 ```
 
 Recording that introspection succeeded or is disabled is still enumeration.
@@ -532,19 +425,14 @@ subpath. For example, if a retained page actually references the same-origin
 `/assets/app.js`, fetch that resource once:
 
 ```json
-{
-  "tool": "http",
-  "arguments": {
-    "method": "GET",
-    "url": "/assets/app.js",
-    "phase": "recon",
-    "max_response_bytes": 8192
-  }
-}
+{"tool":"http","arguments":{"method":"GET","url":"/assets/app.js","phase":"recon","max_response_bytes":8192}}
 ```
 
 Inspect bounded retained content for fetch/XHR/axios calls, API base URLs
-and router definitions. Keep surrounding call-site evidence; a path string
+and router definitions. A vendor prefix does not characterize an entire
+bundle. Use a bounded find_text lookup for a visible API/client-method clue
+before claiming no application call sites; preserve an unknown API-base binding
+or import reference rather than resolving it from product knowledge. Keep surrounding call-site evidence; a path string
 alone is insufficient. Apply the large-response strategy if content is cut.
 Trace visible method, URL construction, query parameters and field assignments
 at a call site, including separate frontend object construction passed to a
@@ -614,6 +502,13 @@ next phase.
 
 ## 7. Build the normalized inventory
 
+Count distinct documented method/path operations from the definition, not schema
+objects or query variants. A directory-listing title is a listing clue, not an
+SPA fallback; wildcard classification needs calibration. Preserve the actual
+status for each route rather than grouping handler errors with auth failures.
+A manual attribution locator must copy the visible binding/schema path; a valid
+source hash does not verify that locator or operation count.
+
 Immediately before `file_write`, reconcile each claim with its source/reference:
 effective method/endpoint, HTTP status, response media type, redacted body marker,
 capture flags and claim confidence. Observations/documents actually read take
@@ -672,25 +567,19 @@ artifact is absent, empty, or a different path is supplied. This marks the
 bounded inventory pass complete; newly discovered routes may still justify
 another focused pass.
 
-For whole-target work, inspect coverage and account for `html_navigation`,
-`standard_metadata`, `api_documentation`, `javascript_endpoint_extraction`,
-`browser_burp_capture`, and `active_content_discovery` before completion.
-`performed` is reserved for machine-observed execution; never self-claim it
-through `record_phase_coverage`. Native `http` records `html_navigation` only
-when its captured successful HTML contains parsed link, script, or form
-references. A truncated prefix without those references does not attest it.
-`content_discovery` records `active_content_discovery` after execution.
+Before whole-target completion, account for html_navigation, standard_metadata,
+api_documentation, javascript_endpoint_extraction, browser_burp_capture and
+active_content_discovery. `performed` is reserved for machine-observed execution; never self-claim
+it through record_phase_coverage or overwrite an adapter receipt. Native HTTP
+attests html_navigation only when successful captured HTML contains references,
+not that navigation was followed. content_discovery attests its executed pass.
 
-For reviewed work without a matching adapter, use
-`workflow(action="record_phase_coverage", phase="enumeration",
-coverage_dimension=..., coverage_status="observed", coverage_reason=...)` with
-its source/artifact and missing attestation limitation. `observed` means
-unattested review, not machine-attested execution. Never use `skipped` to
-simulate performed work or work around missing attestation. Use `skipped` only
-for genuinely omitted work and `not_applicable` only for a dimension that
-truly does not apply, each with a short valid reason. Do not overwrite runtime
-`performed` records. Retry failed/cancelled dimensions or explain an actual
-skip before completion; a missing observation never implies `performed`.
+For unattested review, record_phase_coverage with phase="enumeration",
+coverage_dimension, coverage_status="observed" and coverage_reason naming the
+source and attestation limitation. Never use `skipped` to simulate performed work.
+Use skipped only for genuinely omitted work, not_applicable only for real
+inapplicability, each with a reason. Retry failed/cancelled dimensions or explain
+an actual skip; missing observations never mean performed.
 
 Reconcile each evidenced field with the input records already committed;
 do not re-record unchanged inputs. Record fields separately, including password fields
@@ -713,28 +602,14 @@ is not proof that documentation does not exist. Keep `source_reason` within
 
 ### GET /search
 
-- route_type: backend_endpoint
-- parameter: `q`
-- location: query
-- content_type: -
-- auth: public
-- source: application JS (`main.js`)
-- provenance: reachable; same-origin response observed
-- observed_response: `200`, HTML page with results
-- notes: parameter observed in application flow
+`q` (query), backend_endpoint; observed application network call and same-origin
+200 HTML results. Keep the actual source and inspected response marker.
 
 ### POST /api/orders
 
-- route_type: backend_endpoint
-- parameter: `items`, `address`
-- location: body (JSON)
-- content_type: application/json
-- sample_payload: `{"items":[{"productId":"{id}","quantity":"{number}"}],"address":"{INJECTION_POINT}"}`
-- auth: session cookie required
-- source: form action + `swagger.json`
-- provenance: observed from specification; not requested, so reachability is unknown
-- observed_response: not probed
-- notes: request not submitted during enumeration; no cookie value stored
+Documented JSON `items` array and `address` string; record each field separately.
+Request not submitted: reachability and authenticated access unknown. Keep the
+specification binding/location and a compact redacted payload skeleton.
 
 Each entry should record only observed facts, such as:
 
@@ -790,13 +665,16 @@ vulnerability-specific skill
 
 ### Stop conditions
 
-Stop enumeration when:
+Stop this bounded pass when:
 
-- known routes and resources from application links, documentation, and JS have been collected;
-- forms and parameter-bearing endpoints are inventoried;
-- API entry points are identified;
-- focused content discovery no longer produces useful new routes;
-- further enumeration would become high-volume without a clear objective.
+- useful request fields from the selected sources are inventoried;
+- valuable observed clues are followed within bounds or have a specific omission reason;
+- API entry points and unresolved API-base/auth limitations are distinguished;
+- further work has low expected information gain or would exceed existing bounds;
+- canonical input records, inventory, source obligations and coverage agree.
+
+Optional content discovery need not run to establish this stopping condition.
+Partial review never means a whole bundle, directory or target was surveyed.
 
 Do not escalate into full crawling, large wordlist sweeps across multiple
 hosts, GraphQL schema fuzzing, or payload-based probing. Those activities

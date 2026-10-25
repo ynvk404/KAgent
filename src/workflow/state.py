@@ -1911,6 +1911,7 @@ class WorkflowState:
         invalid_evidence_candidate_ids: frozenset[str] = frozenset(),
         generic_eligible_candidate_ids: frozenset[str] = frozenset(),
         validation_errors: dict[str, str | None] | None = None,
+        validation_admission_errors: dict[str, str | None] | None = None,
         discovery_artifact_errors: dict[str, str] | None = None,
     ) -> tuple[str, tuple[str, ...], tuple[str, ...]]:
         """Return status, actionable work, and blockers for the active objective."""
@@ -1997,7 +1998,11 @@ class WorkflowState:
                     or candidate.status == "deferred" and not candidate.deferred_reason and result is None
                     and candidate.id in generic_eligible_candidate_ids):
                 if candidate.candidate_class in normalized_validators or candidate.id in generic_eligible_candidate_ids:
-                    actionable.append(f"candidate:{candidate.id}")
+                    reason = (validation_admission_errors or {}).get(candidate.id)
+                    if reason:
+                        blockers.append(f"candidate admission blocked:{candidate.id}:{reason}")
+                    else:
+                        actionable.append(f"candidate:{candidate.id}")
                 else:
                     blockers.append(f"candidate validator unavailable:{candidate.id}")
                 continue

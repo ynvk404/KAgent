@@ -45,6 +45,13 @@ allowed-tools:
 
 # SQL injection playbook
 
+A method mismatch or different request geometry invalidates a same-request
+baseline comparison. Reconcile method, origin/path, request media/auth context
+and actual status/response media type from the observation, not a prior summary.
+An auth failure leaves parser/middleware order unknown; a syntax error leaves
+full query structure hypothetical. Earlier analysis observations remain unowned
+planning context even when their IDs and request identity were checked.
+
 Parser sensitivity, controlled SQL evaluation and a confirmed finding are
 different evidence levels. A SQLite error without query text leaves SQL shape
 a hypothesis; do not claim that SELECT or constructed SQL was observed. TRUE

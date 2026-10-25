@@ -376,7 +376,7 @@ async def test_reset_hides_progress_through_await_and_keeps_actual_store_id(tmp_
 
 @pytest.mark.parametrize("reading", [False, True])
 async def test_progress_height_resize_keeps_transcript_anchor_tail_and_copy(tmp_path, reading):
-    from textual.geometry import Offset
+    from textual.geometry import Offset, Size
     from textual.selection import Selection
     from src.ui.core.state import TranscriptEntry
     app, workflow = _workflow_app(tmp_path)
@@ -401,6 +401,12 @@ async def test_progress_height_resize_keeps_transcript_anchor_tail_and_copy(tmp_
         assert all(a is b for a, b in zip(before_lines, app.transcript_log.lines))
         for width, height in [(45, 24), (80, 14), (120, 32)]:
             await pilot.resize_terminal(width, height)
+            # Screen.size mirrors App.size before the deferred resize runs.
+            # Wait for the compositor's actual frame, not the requested size.
+            async with asyncio.timeout(1):
+                while app.screen.region.size != Size(width, height):
+                    await pilot.pause(0.01)
+            await pilot.pause()
             assert app.transcript_log.region.height >= 3
             assert app.input_static.region.height >= 1
             assert app.input_panel.region.bottom <= height

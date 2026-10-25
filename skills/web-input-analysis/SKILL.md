@@ -68,13 +68,13 @@ identifier exactly — do not re-derive it differently here.
 
 ## Preconditions
 
-In whole-target mode, complete Recon → Enumeration → Input Analysis through
-Workflow before opening any new validation attempt. During these phases, keep
-the detection markers and bounded signal probes allowed by this playbook and
-record grounded Candidates for later validation; do not begin confirmation or
-bounded impact validation. Skill loading, artifact writing and approval are not
-phase completion. On prerequisite rejection, return to the missing work before
-retrying. Owned active attempts retain their existing recovery contract.
+In whole-target mode, complete Recon and Enumeration through Workflow before a
+new validation attempt. Analyze and link the exact input and write the canonical
+analysis handoff; independent pending/blocked inputs do not prevent an admitted
+Candidate from proceeding. They still prevent global phase/objective completion.
+Signal probes stay bounded here; confirmation/impact belongs to the loaded
+validator after successful `start_validation`. Loading a skill or approval is not
+phase completion. Owned active attempts retain their recovery contract.
 
 Before starting, you should have:
 
@@ -257,7 +257,10 @@ checks.
 This tells you *whether reflection happens*, not whether it's exploitable.
 
 **Tier 3 — minimal value-change probe, only if tiers 1–2 leave the input
-unclassifiable, and at most one probe per parameter.** Tier 3 exists solely to
+unclassifiable, and at most one probe per parameter.** A known missing-Authorization gate need not be re-probed for each sibling
+body field: retain its operation-level limitation and each input's blocked state.
+A parser/middleware order remains unknown from an auth failure alone; do not
+claim that no JSON/body parsing occurred. Tier 3 exists solely to
 help you classify and prioritize a candidate — it is never a way to "weakly
 confirm" that a vulnerability exists. A different response shape can establish
 input consumption, but a SQLi handoff needs a class-specific hypothesis.
@@ -353,6 +356,13 @@ current dependency when analysis cannot proceed. A blocked input remains an
 objective blocker and must not be reported as complete. If a blocker is later
 resolved, set the same input back to `pending` and analyze it in this objective.
 
+Write/update the canonical handoff with current dispositions and grounded
+Candidates even when the phase cannot close. Read previous operator answers;
+do not re-ask a decided dependency or pressure exclusion. Bind a dependency
+question with questions[].input_ids containing its exact blocked IDs, offer
+"keep blocked", and apply only the actual answer. This answer never commits a
+disposition automatically. Resume preserves these session-specific decisions.
+
 Before `complete_skill`, inspect current readiness and dispositions. Missing
 credentials do not require guessing a login, fabricating a bearer token or
 retrying the same auth failure. Finish other pending triage, then use `ask_user`
@@ -380,7 +390,8 @@ analysis, then attest `analyzed` with `analysis_complete=true`. If the operator
 explicitly excludes it instead, set `dropped` with that exclusion reason and
 retain the untested limitation. Until then, finish other pending inputs and
 report this dependency; do not loop on the same auth failure or complete the phase.
-New validation still requires completed phases and compatible analyzed linkage.
+New validation requires completed Recon/Enumeration, the canonical analysis handoff
+and compatible analyzed linkage for that Candidate; independent blockers stay open.
 
 For every candidate strong enough to include in the list, also call
 `workflow(action="record_candidate", source_skill="web-input-analysis", ...)`
@@ -416,6 +427,17 @@ produce identical status, size, and content markers, record them as
 `no differential observed`; never summarize them as TRUE returning rows and
 FALSE returning none. Signal gathering here is not confirmation, and a later
 validator must not inherit a contradicted conclusion from free-form prose.
+
+For an analysis comparison, a method mismatch or different origin/path invalidates
+the same-request baseline; do not compare POST-handler errors with a GET probe as
+if only the input changed. Keep other fields, media and auth context unchanged.
+When request observations support a Candidate, pass their exact observation_ids
+to record_candidate and reconcile the returned analysis_observations facts:
+method, request URL, actual status, response media type and capture flags.
+These are planning context, not replay baselines or owned terminal evidence.
+Do not include documentation GETs as POST request/control observations.
+An identical invalid-login response proves neither field-specific control nor a
+SQL query; ordinary search variability alone is not an SQLi hypothesis.
 
 Immediately before `file_write`, reconcile claims with their source/reference:
 effective method/endpoint, HTTP status, response media type, redacted body marker,
@@ -524,8 +546,8 @@ artifact_ref="artifacts/web-input-analysis/<target>/candidates.md",
 current_phase="validation")`. This records
 workflow progress independently of the conversational summary.
 
-For an autonomous Whole-target request, continue autonomously after this
-completion: inspect canonical actionable work, load its enabled validator and
+For an autonomous Whole-target request, continue autonomously after the canonical
+handoff, including a partial handoff with independent blocked inputs: inspect canonical actionable work, load its enabled validator and
 call `start_validation` before confirmation probes. Stop only for a recorded
 dependency, exhausted bound or actual permission/input requirement. Phase
 handoff itself does not require the operator to start each candidate. Never
@@ -534,8 +556,10 @@ priorities and deferred counts from the current structured records and keep
 them consistent with the detailed entries and observed evidence.
 
 If a whole-target input remains `blocked`, leave the phase incomplete, explain
-the dependency, and let the runtime report the objective as blocked. Resume the
-same input in the same objective after the dependency is resolved.
+the dependency and preserve it in the canonical handoff. Continue admitted independent
+Candidates without waiting for exclusion or asking permission to start each one.
+Report the objective incomplete; resume the same blocked input in the same objective
+after the dependency is resolved.
 
 Do not turn signal-gathering into confirmation. Do not chain probes into a
 working payload. Do not decide a finding exists here — that determination,

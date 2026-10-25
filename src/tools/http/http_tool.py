@@ -632,10 +632,13 @@ class HTTPTool(Tool):
                                     for k, v in action.headers)
                         + '\n\n' + redact_request_context(action.body.decode(errors='replace'),
                                                             request.headers.get('content-type')))
+                    request_media = redact(request.headers.get('content-type', '')).partition(';')[0].strip().lower() or None
                     if policy is not None:
                         for secret in policy.internal_secret_values():
                             if secret:
                                 request_text = request_text.replace(secret, '[INTERNAL SECRET OMITTED]')
+                                if request_media and secret.lower() in request_media:
+                                    request_media = None
                     request_preview = request_text[:REQUEST_PREVIEW_CHARS]
                     request_details = {
                         # Like Observation.body, encode retained bytes so JSON
@@ -647,6 +650,8 @@ class HTTPTool(Tool):
                         'request_mode': 'captured-replay' if action.capture_source is not None else 'direct',
                         'response_cap_unit': representation + '-bytes',
                     }
+                    if request_media:
+                        request_details['request_media_type'] = request_media
                     if action.capture_source is not None:
                         request_details['baseline_request_ref'] = action.capture_source.baseline_ref
                     if trusted_http:

@@ -166,13 +166,18 @@ async def test_real_rejection_reaches_next_model_request_and_raw_sinks(tmp_path,
 
 
 async def test_native_session_budget_exhaustion_is_visible_without_changing_denial(tmp_path):
+    import json
+
     from src.agent.agent import _to_agent_event
     from src.llm.core.types import FunctionCall, ToolCall
     from tests.helpers.agent_fakes import FakeSignal
     from tests.helpers.burp_selection import make_runtime
     runtime = make_runtime(tmp_path, max_calls=1)
     runtime.policy.used = 1
-    call = ToolCall('budget', FunctionCall('file_write', '{"path":"proof.txt","content":"fixture"}'))
+    # Reach the session-budget gate with an in-profile path. A relative path
+    # resolves against the process cwd and correctly hits the profile gate first.
+    call = ToolCall('budget', FunctionCall('file_write', json.dumps({
+        'path': str(tmp_path / 'proof.txt'), 'content': 'fixture'})))
     parsed = runtime.agent.parse_tool_call(call)
     call_event = _to_agent_event(runtime.agent._tool_call_event(call, parsed))
     state = reducer(seed(), AgentEventAction(call_event))

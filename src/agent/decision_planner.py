@@ -461,6 +461,27 @@ def build_whole_target_plan(
             candidate_id=candidate_id,
         )
 
+    # The runtime admission projection checks discovery, canonical handoff and
+    # compatible analyzed linkage. Independent input obligations stay open.
+    ready = next(iter(sorted(
+        (c for c in context.candidates if c.validation_ready is True and c.status in {"new", "queued"}),
+        key=lambda c: ({"queued": 1, "new": 2}.get(c.status, 3),
+                       {"high": 0, "medium": 1, "low": 2}.get(c.priority or "", 3), c.id),
+    )), None) if not context.discovery_obligation_pending and not context.selected_pending_source_count else None
+    if ready and not (context.phase_completion_readiness
+                      and context.phase_completion_readiness.get("artifact_valid") is False):
+        route = context.validation_routes.get(ready.id)
+        if route and route.kind != "expert":
+            return _route_plan(ready, route)
+        validators = _validation_skills_for_class(skills, ready.candidate_class)
+        if len(validators) == 1:
+            name = validators[0].name
+            return DecisionPlan(name, "canonical handoff and analyzed linked input admit validation", "normal", [],
+                "Decision planner guidance for this turn:\n"
+                + expert_attempt_preparation(name, ready.id)
+                + " Other pending discovery/input obligations remain open; follow their existing contract.",
+                candidate_id=ready.id)
+
     source_guidance = source_frontier_guidance(context)
     phase_skills = (
         ("recon", "recon"),
@@ -520,10 +541,11 @@ def build_whole_target_plan(
                 + (f'Load the current playbook with load_skill(name="{skill.name}") before phase work. '
                  if skill.name not in context.active_skills else "")
                 + "Follow the skill playbook. Runtime structured state controls "
-                "completion; this recommendation is guidance. Complete Recon → Enumeration → Input Analysis "
-                "through Workflow before opening a new validation attempt. Detection/markers permitted by the "
-                "current playbook and grounded Candidate recording remain allowed; defer confirmation and "
-                "bounded impact validation. Loading a skill, writing an artifact or approval is not completion. "
+                "completion; this recommendation is guidance. Complete Recon and Enumeration through Workflow. "
+                "For each Candidate, before opening a new validation attempt, analyze and link that exact input and write its canonical "
+                "analysis handoff. Independent blocked inputs prevent global phase completion, not an admitted "
+                "Candidate. Detection/markers and grounded Candidate recording remain allowed. Loading a skill "
+                "or approval is not completion. "
                 "If blocked by a prerequisite, do the missing work before retrying."
                 + completion_guidance
                 + ("\nPhase requirements: " + str({
@@ -575,26 +597,6 @@ def build_whole_target_plan(
             ),
             candidate_id=candidate_id,
         )
-
-    # The runtime admission projection includes all three completed phases and
-    # compatible analyzed linkage. Late unselected frontier/inputs stay open.
-    ready = next(iter(sorted(
-        (c for c in context.candidates if c.validation_ready is True and c.status in {"new", "queued"}),
-        key=lambda c: ({"queued": 1, "new": 2}.get(c.status, 3),
-                       {"high": 0, "medium": 1, "low": 2}.get(c.priority or "", 3), c.id),
-    )), None) if not context.discovery_obligation_pending and not context.selected_pending_source_count else None
-    if ready:
-        route = context.validation_routes.get(ready.id)
-        if route and route.kind != "expert":
-            return _route_plan(ready, route)
-        validators = _validation_skills_for_class(skills, ready.candidate_class)
-        if len(validators) == 1:
-            name = validators[0].name
-            return DecisionPlan(name, "completed phases and analyzed linked input admit validation", "normal", [],
-                "Decision planner guidance for this turn:\n"
-                + expert_attempt_preparation(name, ready.id)
-                + " Other pending discovery/input obligations remain open; follow their existing contract.",
-                candidate_id=ready.id)
 
     # Partial/blocked selected sources may remain
     # after the pending frontier is empty. Gate every later candidate route.

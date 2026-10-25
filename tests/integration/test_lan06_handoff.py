@@ -71,8 +71,11 @@ async def test_supported_unreasoned_deferral_is_consistently_queued_and_routes_t
     cid = first['candidate']['id']
     assert first['candidate']['source_ref'] == source.retained_ref
     assert rt.workflow.attack_surface_inputs[inp['id']].candidate_ids == [cid]
+    before = deepcopy(rt.workflow.to_dict())
     early = await execute(rt, 'workflow', {'action': 'start_validation', 'candidate_id': cid}, success=False)
-    assert early.status == 'error' and 'input_analysis must complete' in early.result
+    assert early.status == 'error' and 'input_analysis canonical artifact requires repair' in early.result
+    assert rt.workflow.to_dict() == before and not rt.workflow.attempts
+    assert rt.workflow.attack_surface_inputs[inp['id']].disposition == 'pending'
     await execute(rt, 'workflow', {'action': 'set_input_disposition', 'input_id': inp['id'],
                                   'disposition': 'analyzed', 'analysis_complete': True})
     skill = rt.skills.get('web-input-analysis')

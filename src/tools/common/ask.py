@@ -20,6 +20,7 @@ class Question:
     question: str
     options: list[Option] = field(default_factory=list)
     header: Optional[str] = None
+    input_ids: tuple[str, ...] = ()
 
 
 class AskPrompter(Protocol):
@@ -78,6 +79,11 @@ class AskUserTool(Tool):
                             "header": {
                                 "type": "string",
                                 "description": "Optional short label for the question.",
+                            },
+                            "input_ids": {
+                                "type": "array", "maxItems": 32, "uniqueItems": True,
+                                "items": {"type": "string"},
+                                "description": "Exact current blocked Workflow input IDs for this dependency question. Rewording does not ask it again; answers do not commit exclusions or grant permission.",
                             },
                             "question": {
                                 "type": "string",
@@ -233,11 +239,8 @@ class AskUserTool(Tool):
                         )
                     )
 
-                add_authorized_testing_option(
-                    qtext,
-                    header,
-                    options,
-                )
+                if not item.get("input_ids"):
+                    add_authorized_testing_option(qtext, header, options)
 
                 question = Question(
                     question=qtext,
@@ -245,6 +248,12 @@ class AskUserTool(Tool):
                     header=header,
                 )
 
+            ids = item.get("input_ids", [])
+            if (not isinstance(ids, list) or len(ids) > 32
+                    or any(not isinstance(value, str) or not value or len(value) > 80 for value in ids)
+                    or len(set(ids)) != len(ids)):
+                raise ValueError("input_ids must be unique bounded Workflow input IDs")
+            question.input_ids = tuple(sorted(ids))
             questions.append(question)
         return questions
 
@@ -257,11 +266,29 @@ class AskUserTool(Tool):
         # Parse the entire batch before presenting anything or recording a
         # pending question. A bad later question must not partially ask it.
         questions = self._questions(args)
-        answers = []
+        from src.permission.runtime.execution import policy_for, ExecutionBlocked
+        policy = policy_for(prompter)
+        # Validate the whole batch before showing its first question. Dependency
+        # identity binds an answer to existing inputs, never to an inferred scope.
+        identities = []
         for item, question in zip(args["questions"], questions):
-            from src.permission.runtime.execution import policy_for, ExecutionBlocked
-            policy = policy_for(prompter)
-            key = hashlib.sha256(json.dumps([policy.stamp() if policy else None, item],
+            identity: Any = item
+            if question.input_ids:
+                boundary = policy.generic_validation if policy else None
+                state = boundary.state if boundary else None
+                objective = state.objective if state else None
+                rows = {row.id: row for row in state.objective_inputs()} if state else {}
+                if (objective is None or objective.mode != "whole_target"
+                        or any(iid not in rows or rows[iid].disposition != "blocked" for iid in question.input_ids)):
+                    raise ValueError("input_ids require exact current blocked objective inputs")
+                identity = [objective.id, objective.target_origin,
+                            [(iid, rows[iid].disposition_reason) for iid in question.input_ids]]
+            identities.append(identity)
+        answers = []
+        for identity, question in zip(identities, questions):
+            context = (policy.session_id or policy.engagement.http_permissions.session_id
+                       if policy and question.input_ids else policy.stamp() if policy else None)
+            key = hashlib.sha256(json.dumps([context, identity],
                                            sort_keys=True, default=str).encode()).hexdigest()
             if policy is not None and key in policy.input_questions:
                 choice = policy.input_questions[key]
@@ -272,13 +299,14 @@ class AskUserTool(Tool):
                     if len(policy.input_questions) >= 128:
                         raise ExecutionBlocked("blocked: input-question-capacity; operator retry required")
                     policy.input_questions[key] = None
+                    policy.input_question_texts[key] = question.question
                 choice = await self.prompter.ask(question, signal)
                 if policy is not None:
                     policy.input_questions[key] = choice
 
             answers.append(
                 {
-                    "question": question.question,
+                    "question": policy.input_question_texts.get(key, question.question) if policy else question.question,
                     "answer": choice
                 }
             )

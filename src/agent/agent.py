@@ -2316,6 +2316,35 @@ class Agent:
                and objective.id in boundary.retest_objectives
         )
 
+    def _blocked_input_handoff_instruction(self) -> str | None:
+        """A bounded coordination opportunity, never authorization or triage."""
+        objective = self.workflow.objective
+        origin = self.target.origin()
+        if (objective is None or objective.mode != "whole_target"
+                or origin is None
+                or origin.as_url() != objective.target_origin
+                or not {"recon", "enumeration"} <= self.workflow.completed_phases(objective)
+                or any(c.status == "validating" for c in self.workflow.objective_candidates())
+                or self.workflow.source_completion_error()):
+            return None
+        blocked = [item.id for item in self.workflow.objective_inputs() if item.disposition == "blocked"]
+        if not blocked:
+            return None
+        if not any(self.tools.get(name) is not None and self.is_tool_allowed(name).ok
+                   for name in ("ask_user", "file_write")):
+            return None
+        return (
+            "Bounded blocked-input handoff within the existing iteration limit. "
+            "Read existing operator answers before asking; do not re-ask a decided dependency or pressure exclusion. "
+            "If this dependency has no answer, use ask_user once, binding questions[].input_ids to the exact affected IDs: "
+            + ", ".join(blocked) + ". Offer keeping the inputs blocked; YOLO is not an answer. "
+            "Then apply only the operator's actual decision and write/update the canonical web-input-analysis "
+            "candidates artifact with current dispositions, sourced candidates and untested limitations. "
+            "An answer alone is not a disposition commit. No credential guessing, auth re-probes, automatic exclusions, "
+            "fabricated Candidates or phase completion. Independent admitted Candidates may continue; otherwise "
+            "report incomplete after this bounded handoff."
+        )
+
     def _whole_target_state(self) -> tuple[str, tuple[str, ...], tuple[str, ...]]:
         objective = self.workflow.objective
         if objective is None or objective.mode != "whole_target":
@@ -2341,6 +2370,10 @@ class Agent:
             validator_classes=self._workflow_validator_classes(),
             coverage_sync_available=coverage_sync_available,
             validation_errors=validation_errors,
+            validation_admission_errors={
+                candidate.id: workflow_tool.validation_admission_error(candidate.id, execution)
+                for candidate in self.workflow.objective_candidates()
+            } if isinstance(workflow_tool, WorkflowTool) else None,
             discovery_artifact_errors=self._discovery_artifact_errors(),
             generic_eligible_candidate_ids=frozenset(
                 cid for cid, route in routes.items() if route.kind == "generic"
@@ -3990,6 +4023,10 @@ class Agent:
             if recovery_stop is not None:
                 return recovery_stop
 
+        # A blocked inventory needs an operator decision and an honest canonical
+        # handoff, not an immediate tool-free summary. Two existing-budget turns
+        # permit ask -> apply answer/write. They never reset HTTP/proof budgets.
+        blocked_handoff_turns = 0
         for step in range(max_steps):
 
             ownership.check(self)
@@ -4198,6 +4235,11 @@ class Agent:
                             max_steps=max_steps,
                         )
                     if not actionable and blockers:
+                        if (step < max_steps - 1 and blocked_handoff_turns < 2
+                                and (instruction := self._blocked_input_handoff_instruction())):
+                            working.append(Message("system", instruction))
+                            blocked_handoff_turns += 1
+                            continue
                         return await self._whole_target_synthesis(
                             working, signal, emit,
                             thinking_enabled=turn_request_thinking,
@@ -4333,7 +4375,8 @@ class Agent:
             finally:
                 if whole_target:
                     status, actionable, blockers = self._whole_target_state()
-                    if status == "completed" or (not actionable and blockers):
+                    if status == "completed" or (not actionable and blockers
+                            and (blocked_handoff_turns >= 2 or step == max_steps - 1)):
                         self._tool_checkpoint_request.tools = None
 
             input_unavailable = any(
@@ -4443,6 +4486,11 @@ class Agent:
                         max_steps=max_steps,
                     )
                 if not actionable and blockers:
+                    if (step < max_steps - 1 and blocked_handoff_turns < 2
+                            and (instruction := self._blocked_input_handoff_instruction())):
+                        working.append(Message("system", instruction))
+                        blocked_handoff_turns += 1
+                        continue
                     return await self._whole_target_synthesis(
                         working, signal, emit,
                         thinking_enabled=turn_request_thinking,

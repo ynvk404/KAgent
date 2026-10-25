@@ -184,8 +184,13 @@ async def test_whole_target_discovery_artifacts_and_phase_gates_remain_mandatory
     other, _ = state.add_candidate(Candidate(
         candidate_class="sqli", target=ORIGIN, endpoint="/second", objective_id=state.objective.id,
     ))
-    status, actionable, _ = agent._whole_target_state()
-    assert status == "actionable" and f"candidate:{other.id}" in actionable
+    status, actionable, blockers = agent._whole_target_state()
+    # This record has no analyzed linked input. It remains an unresolved
+    # obligation, while admission-aware actionability must not advertise it.
+    assert status == "blocked" and f"candidate:{other.id}" not in actionable
+    assert any(f"candidate admission blocked:{other.id}:" in reason for reason in blockers)
+    assert tool.validation_admission_error(other.id, runtime[2]) is not None
+    assert state.latest_result(other.id) is None
 
 
 async def test_custom_validator_operational_dependency_keeps_canonical_gate(runtime, tmp_path):

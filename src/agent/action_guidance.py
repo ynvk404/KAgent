@@ -21,7 +21,7 @@ def render_action_guidance(view: ActionView, context: PlannerContext, *, owned_a
             lines.append("Recommended: finish current validation/recovery before discovery.")
         if owned_active:
             lines.append(
-                "Recommended: reconcile the request ledger, owned observations and effects; list only missing metadata. "
+                "Recommended: reconcile required request associations, the ledger, owned observations and effects; list only missing metadata. "
                 "Use actual IDs/timing; obs_ is not a read_tool_result reference. "
                 "Use record_attempt_state promptly for supported effects while ownership/action remains valid; "
                 "do not wait for proof. GET or no write acknowledgement does not establish mutation=false; unknown stays unknown.")
@@ -37,6 +37,12 @@ def render_action_guidance(view: ActionView, context: PlannerContext, *, owned_a
             lines.append(
                 "Recommended: no owned active attempt; inspect list and the runtime handoff for permitted evidence repair, "
                 "exact retries or current admission. Preserve terminal results and recovery budgets; do not automatically reopen an attempt.")
+    elif context.objective_mode == "whole_target" and any(
+        c.validation_ready is True and c.status in {"new", "queued"} for c in context.candidates
+    ):
+        lines.append("Recommended: load the admitted Candidate's validator and start_validation before probes. "
+                     "Its canonical analyzed handoff permits independent work; pending/blocked inputs remain open, "
+                     "and the objective remains incomplete. Do not ask for exclusion to start this Candidate.")
     elif phase in {"recon", "enumeration", "input_analysis"}:
         if phase == "recon":
             lines.append("Recommended: gather sourced service/technology observations; inspect coverage gaps. Scanner hints are not vulnerabilities.")
@@ -74,7 +80,7 @@ def render_action_guidance(view: ActionView, context: PlannerContext, *, owned_a
                 'Unstarted supported work is queued; deferred needs an actual deferred_reason, not merely unconfirmed status.')
             if context.blocked_input_count:
                 lines.append(
-                    'Blocked inputs prevent complete_skill and new validation admission. Finish other pending triage; '
+                    'Blocked inputs prevent complete_skill, not validation of an independent analyzed Candidate with a canonical handoff. Finish other pending triage; '
                     'do not guess credentials or tokens to clear readiness. Use ask_user once for missing input or an '
                     'operator exclusion; only an actual exclusion justifies dropped for that dependency. '
                     'Otherwise keep blocked and report incomplete. Update the artifact before completion; '

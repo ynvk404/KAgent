@@ -41,6 +41,7 @@ from src.workflow.state import (
     WorkflowState,
     candidate_origin,
     normalize_target_origin,
+    normalize_media_type,
     validation_result_fingerprint,
 )
 from src.workflow.evidence.artifacts import EvidenceArtifact, verify_evidence_reads, check_proof_references
@@ -129,7 +130,7 @@ ACTION_INPUTS = {
     'record_candidate': ('candidate_class', 'target', 'endpoint', 'method', 'parameter', 'location',
                          'test_case', 'priority', 'signals', 'baseline_request_ref', 'auth_context_ref',
                          'content_type', 'request_template', 'source_ref', 'source_skill', 'status',
-                         'input_id', 'current_phase', 'deferred_reason'),
+                         'input_id', 'current_phase', 'deferred_reason', 'observation_ids'),
     'record_evidence': ('candidate_id', 'evidence_path', 'observation_ids'),
     'start_validation': ('candidate_id', 'probe', 'related_requests', 'assessment'),
     'record_attempt_state': ('candidate_id', 'attempt_id', 'mutation_state', 'effect_basis',
@@ -217,7 +218,7 @@ class WorkflowTool(Tool):
             "or insufficient-evidence/deferred with reason before starting another candidate. "
             "mutation_performed: verified writes; cleanup needs separate authority. Samples aren't replay baselines.\n"
             "For primary-only validation, prefer start_validation with candidate_id alone when the Candidate covers "
-            "the primary request and current prerequisites are met. Whole-target new Attempts require completed Recon, Enumeration and Input Analysis and a linked analyzed input; Direct, candidate-validation and owned active Attempt recovery keep their existing admission. Generic still needs an admitted probe/proposal. "
+            "the primary request and current prerequisites are met. Whole-target new Attempts require completed Recon/Enumeration, a canonical analysis handoff and a compatible linked analyzed input. Independent pending/blocked inputs remain open and do not admit themselves. Direct, candidate-validation and owned active Attempt recovery keep their existing admission. Generic still needs an admitted probe/proposal. "
             "related_requests is optional supplementary method/URL associations, not individual payload observations.\n"
             '{"action":"record_candidate","candidate_class":"sqli","endpoint":"/login","method":"POST","parameter":"email"}\n'
             '{"action":"start_validation","candidate_id":"<returned candidate.id>"}'
@@ -414,7 +415,7 @@ class WorkflowTool(Tool):
             'status': 'Registration/list status; not used by record_result. Omit or use queued for unstarted supported work. Explicit deferred requires deferred_reason; it is not a synonym for unconfirmed. Only start_validation owns validating.',
             'deferred_reason': 'record_candidate: actual dependency for an intentional deferral, preserved on enrichment. To resolve it before any result, explicitly use status=queued and deferred_reason=null after repairing the dependency. record_result: unresolved outcome reason.',
             'input_id': 'Whole-target: reuse the exact input_id from record_input/list; get_input returns canonical endpoint, method and source provenance. Inherit these fields rather than replacing a concrete path with a template. Do not drop input_id or source_ref to recover from a binding error.',
-            'observation_ids': 'Exact HTTP/authoritative evidence IDs matching candidate, attempt and request. record_evidence: declare a primary parent for every explicit observation ID in the candidate proof fields, headings or table rows, including inconclusive history; effects observation_ids do not declare proof parents. Terminal sources: complete, untruncated, completed.',
+            'observation_ids': 'record_candidate: declare existing same-request analysis/control IDs; runtime checks method/origin/path and returns actual status/media/capture facts without ownership or confirmation. Documentation attribution is separate. record_evidence/record_result: exact authoritative IDs matching candidate, attempt and request. record_evidence: declare a primary parent for every explicit observation ID in candidate proof fields, headings or table rows, including inconclusive history; effects IDs do not declare proof parents. Terminal sources: complete, untruncated, completed.',
             'outcome': 'Required for record_result.',
             'related_requests': (
                 'Optional supplementary request associations for start_validation; a single legacy explicit primary association remains valid. '
@@ -754,6 +755,23 @@ class WorkflowTool(Tool):
     def _record_candidate(self, args: dict[str, Any], policy=None) -> str:
         try:
             candidate = self.candidate_proposal(args)
+            analysis_observations = []
+            for ref in references(args.get("observation_ids", []), "observation_ids"):
+                self._validate_input_http_source({**candidate.to_dict(), "source_ref": ref,
+                    "target_origin": candidate_origin(candidate.target)}, policy)
+                store = policy.observations if policy else self.observations
+                item = store._items.get(ref)
+                if item is None or item.source_kind not in {"native-http", "imported-capture"}:
+                    raise ValueError("analysis observation requires trustworthy HTTP request metadata")
+                media = next((redact(value).partition(";")[0].strip().lower()
+                              for name, value in item.response_headers if name.lower() == "content-type"), None)
+                analysis_observations.append({
+                    "observation_id": ref, "method": item.method, "request_url": redact(item.url),
+                    "request_media_type": (item.source_details or {}).get("request_media_type"),
+                    "status": item.status, "response_media_type": media,
+                    "complete": item.complete, "truncated": item.truncated,
+                    "execution_status": item.execution_status, "terminal_evidence": False,
+                })
             existing = self.state.candidates.get(candidate.id)
             if (self.state.objective is not None and self.state.objective.mode == "whole_target"
                     and self.state.objective_inputs() and not arg_string(args, "input_id")
@@ -861,6 +879,7 @@ class WorkflowTool(Tool):
                 "ok": True,
                 "created": created,
                 "candidate": stored.to_dict(),
+                "analysis_observations": analysis_observations,
                 "supported": supported,
                 "validator_resolution": validator_resolution,
                 "validator_reason": reason,
@@ -1121,6 +1140,13 @@ class WorkflowTool(Tool):
             raise ValueError("HTTP source_ref method does not match input")
         if urlsplit(source_url).path != urlsplit(admitted["endpoint"]).path:
             raise ValueError("HTTP source_ref path does not match input")
+        # New native captures retain the effective request media type separately
+        # from response headers. Older/imported observations may lack this fact;
+        # do not infer it from a response or a redacted body.
+        observed_media = normalize_media_type((item.source_details or {}).get("request_media_type"))
+        declared_media = normalize_media_type(admitted.get("content_type"))
+        if observed_media and declared_media and observed_media != declared_media:
+            raise ValueError("HTTP source_ref media type does not match input")
 
     @staticmethod
     def _normalize_method_endpoint(
@@ -1206,8 +1232,7 @@ class WorkflowTool(Tool):
             for row in self.state.attempts.values()
         ):
             return None  # Resume only the same owned active attempt; not a status-only bypass.
-        for phase, name in (("recon", "recon"), ("enumeration", "web-enumeration"),
-                            ("input_analysis", "web-input-analysis")):
+        for phase, name in (("recon", "recon"), ("enumeration", "web-enumeration")):
             marker = self.state.phase_completions.get(f"{objective.id}:{phase}")
             if marker is None or phase not in self.state.completed_phases(objective):
                 return f"{phase} must complete before a new Whole-target validation attempt"
@@ -1217,6 +1242,19 @@ class WorkflowTool(Tool):
             # its canonical artifact check applies to this completed pass.
             if not readiness["artifact_valid"]:
                 return f"{phase} canonical artifact requires repair before new validation"
+        # Analysis is a per-input handoff, not a barrier on independent inputs.
+        # The global completion marker still requires every input to be closed.
+        # Preserve canonical artifacts and reject an invalid existing marker;
+        # absence of that marker is expected during a partial handoff.
+        marker = self.state.phase_completions.get(f"{objective.id}:input_analysis")
+        if marker is not None and "input_analysis" not in self.state.completed_phases(objective):
+            return "input_analysis completion marker does not match the current objective and target"
+        readiness = self.phase_completion_readiness(
+            "web-input-analysis", artifact_ref=marker.artifact_ref if marker else None)
+        if not readiness["artifact_valid"]:
+            return "input_analysis canonical artifact requires repair before new validation"
+        if marker is None and (reason := self.state.source_completion_error()):
+            return reason
         for item in self.state.objective_inputs():
             if candidate_id not in item.candidate_ids or item.disposition != "analyzed":
                 continue
@@ -1230,7 +1268,7 @@ class WorkflowTool(Tool):
     def _validation_prerequisite_error(self, reason: str) -> ToolOutput:
         return self._workflow_error(reason, code="WHOLE_TARGET_VALIDATION_PREREQUISITE",
             category="missing_prerequisite",
-            next_action="Inspect current phase readiness and load its playbook. Complete Recon, then Enumeration, then Input Analysis through Workflow with their canonical artifacts and coverage contract; analyze and link this exact input. Early detection and grounded Candidate recording are allowed, not confirmation or impact validation. Loading a skill, writing an artifact or permission approval is not completion. Return to the missing work before retrying. Do not invent completion, source_skill or current_phase receipts. Historical completions do not reopen for late inputs/sources. An owned active Attempt keeps its existing recovery path; Direct and candidate-validation admission are unchanged.")
+            next_action="Inspect current phase readiness and load its playbook. Complete Recon and Enumeration through Workflow; write the canonical analysis handoff, analyze and link this exact input before opening a new validation attempt. Independent pending/blocked inputs remain open; never drop them to admit this Candidate. Loading a skill or permission approval is not completion. Do not invent completion, source_skill or current_phase receipts. Historical completions do not reopen for late inputs/sources. An owned active Attempt keeps its existing recovery path; Direct and candidate-validation admission are unchanged.")
 
     def validation_handoff(self, candidate_id: str, policy=None) -> dict[str, Any] | None:
         """Bounded lifecycle metadata, never observations, admission or authority."""

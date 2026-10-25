@@ -70,17 +70,23 @@ async def test_blocked_inputs_require_real_resolution_or_operator_exclusion(tmp_
     await execute(rt, 'file_write', {'path': str(tmp_path / ref), 'content': 'One hypothesis; two blocked inputs.'})
     rejected = await execute(rt, 'workflow', {'action': 'complete_skill', 'skill_name': 'web-input-analysis'}, success=False)
     assert 'PHASE_NOT_READY' in rejected.result
-    early = await execute(rt, 'workflow', {'action': 'start_validation', 'candidate_id': candidate}, success=False)
-    assert 'input_analysis must complete' in early.result and not rt.workflow.attempts
     request = ChatRequest(rt.client.model(), [], tools=rt.registry.as_llm_tools())
     await rt.agent._prepare_turn_request(request, lambda _: None)
     advice = next(m.content for m in request.messages if m.content.startswith('Workflow action guidance:'))
-    assert 'ask_user' in advice and 'operator exclusion' in advice and 'blocked' in advice
-    assert 'guess credentials' in advice
+    assert 'start_validation' in advice and 'independent work' in advice
+    assert 'Do not ask for exclusion' in advice
+    # The candidate may proceed, while the independent inputs and global phase
+    # remain blocked. This is not a result, coverage or exclusion receipt.
+    early = await execute(rt, 'workflow', {'action': 'start_validation', 'candidate_id': candidate})
+    attempt_id = json.loads(early.result)['validation_context']['attempt_id']
+    assert all(rt.workflow.attack_surface_inputs[iid].disposition == 'blocked' for iid in blocked)
+    assert not rt.workflow.validation_results and not rt.workflow.evidence
+    assert 'input_analysis' not in rt.workflow.completed_phases()
     # This is the existing operator branch, not automatic exclusion or permission.
     answered = await execute(rt, 'ask_user', {'questions': [{'question': 'Exclude the two inaccessible inputs from this assessment or leave blocked?',
         'options': [{'label': 'Exclude these inputs'}, {'label': 'Leave blocked'}]}]})
     assert json.loads(answered.result)['answers'][0]['answer'] == 'Exclude these inputs'
+    assert all(rt.workflow.attack_surface_inputs[iid].disposition == 'blocked' for iid in blocked)
     for item in blocked:
         await execute(rt, 'workflow', {'action': 'set_input_disposition', 'input_id': item,
             'disposition': 'dropped', 'disposition_reason': 'Operator exclusion for this assessment; auth-limited and untested.'})
@@ -89,6 +95,7 @@ async def test_blocked_inputs_require_real_resolution_or_operator_exclusion(tmp_
     await execute(rt, 'load_skill', {'name': 'sql-injection'})
     started = await execute(rt, 'workflow', {'action': 'start_validation', 'candidate_id': candidate})
     assert json.loads(started.result)['ok'] and not rt.policy.observations._items
+    assert json.loads(started.result)['validation_context']['attempt_id'] == attempt_id
 
 
 @pytest.mark.parametrize('mode', ['direct', 'whole_target'])
