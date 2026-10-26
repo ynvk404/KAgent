@@ -39,6 +39,8 @@ class PlannerCandidate:
     validation_complete: bool | None = None
     completion_action: str | None = None
     validation_action: str | None = None
+    discovery_next_step: str | None = None
+    discovery_attempt_ref: str | None = None
 
 
 @dataclass(frozen=True)
@@ -94,7 +96,8 @@ class PlannerContext:
         for phase in ("recon", "enumeration", "input_analysis"):
             if phase not in self.completed_phases:
                 return phase
-        return "input_analysis" if self.pending_input_count or self.blocked_input_count else "validation"
+        return "input_analysis" if (self.pending_input_count or self.blocked_input_count
+                                    or any(c.discovery_next_step for c in self.candidates)) else "validation"
 
 
 class SkillRecommendation(TypedDict):
@@ -481,6 +484,32 @@ def build_whole_target_plan(
                 + expert_attempt_preparation(name, ready.id)
                 + " Other pending discovery/input obligations remain open; follow their existing contract.",
                 candidate_id=ready.id)
+
+    # Keep candidate-scoped discovery out of the global source frontier. Ready
+    # validation above, active recovery and finding persistence retain priority.
+    discovery = next(iter(sorted((c for c in context.candidates if c.discovery_next_step),
+                                 key=lambda c: ({"high": 0, "medium": 1, "low": 2}.get(c.priority or "", 3), c.id))), None)
+    if (discovery and not context.pending_input_count
+            and {"recon", "enumeration"} <= context.completed_phases
+            and not context.discovery_obligation_pending and not context.selected_pending_source_count
+            and not context.revalidation_candidate_ids
+            and not any(_startable_validation(c, context) for c in context.candidates)
+            and any(s.name == "web-input-analysis" and not s.disable_model_invocation for s in skills)):
+        investigation = (
+            f"Investigation returned tool result {discovery.discovery_attempt_ref}; reconcile its outcome through record_candidate. "
+            "This step is investigated, not fresh work. Do not replay it. "
+            if discovery.discovery_attempt_ref else
+            "Choose a useful authorized investigation; preserve inferred versus observed context. "
+        )
+        return DecisionPlan("web-input-analysis", "candidate discovery outcome needs reconciliation" if discovery.discovery_attempt_ref
+                            else "candidate request discovery remains actionable", "normal", [],
+            "Decision planner guidance for this turn:\n"
+            f"Candidate {discovery.id} has an explicit request-discovery step, independent of input triage. "
+            "Load web-input-analysis and inspect its discovery_next_step in workflow list. "
+            + investigation +
+            "Update the step from new evidence or a meaningful hypothesis, or explicitly close it with the actual "
+            "non-actionable/dependency reason. Do not repeat unchanged discovery or infer operator-only needs. "
+            "An admitted independent candidate takes precedence.", candidate_id=discovery.id)
 
     source_guidance = source_frontier_guidance(context)
     phase_skills = (

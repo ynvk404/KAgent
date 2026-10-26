@@ -150,9 +150,12 @@ probes below retain their existing bounds and permission gates.
   or path parameter).
 
 Everything else becomes an input to triage, not automatically a candidate.
-Parameter names and HTTP methods are context hints only. Do not create a
-Candidate until the inventory or a bounded observation shows that the server
-reads or uses that specific input.
+Parameter names and HTTP methods are context hints only. A Candidate records a
+class-specific hypothesis, not a finding or a verified request schema. You may
+retain a meaningful hypothesis with inferred request context while investigating
+it; label that context inferred and preserve its missing discovery explicitly.
+Do not invent a vulnerability hypothesis for every field, or require schema
+verification for an inferred input you intentionally do not select as a Candidate.
 
 ## 2. Classify context for each candidate
 
@@ -169,11 +172,29 @@ Before declaring an access dependency, distinguish the operation's role:
   or a need for operator credentials. An inferred POST does not establish its fields.
 
 Review available documentation, form controls, call sites and HTTP observations
-first. Use existing bounded authorized investigation when it can resolve a useful
-gap, or retain uncertainty during passive triage. Never fabricate credentials,
-body schemas, tokens or sessions, and do not automatically probe authentication
-endpoints. Respect evidenced CSRF, CAPTCHA, client-authentication and authorization
+first. Select meaningful authorized source review or request-hypothesis probes
+when they can advance a selected Candidate. An exploratory request may test an
+explicitly inferred method, media type or body; it does not make that schema
+observed or establish server acceptance. Never fabricate credentials, tokens or
+sessions, or present a hypothesized body as a captured request. Do not automatically
+probe authentication endpoints. Respect evidenced CSRF, CAPTCHA, client-authentication and authorization
 requirements; `blocked` remains appropriate for a genuine unmet prerequisite.
+These probes resolve request context, not exploitability: retain the signal-tier
+bounds below and all existing scope, permission, capture and resource limits.
+Missing schema alone is not an operator dependency. Ask only when the missing
+information or authorization genuinely requires the operator.
+
+When request context is inferred but unverified, incomplete or truncated JavaScript
+or documentation alone is not a reason to abandon a plausible hypothesis.
+Consider a safe, authorized HTTP probe with innocuous values when its response
+could distinguish specific request-context hypotheses, without refetching to
+recover truncated source. Choose among probing, retained-source inspection,
+documentation and other permitted evidence gathering by safety, expected
+information value and remaining resources. No probe is required for every inferred
+input; avoid unnecessary or repeated requests and destructive or high-risk
+operations. An attempted probe or HTTP status alone does not verify the schema:
+interpret the actual response evidence and retain uncertainty about fields or
+server consumption it does not establish.
 
 For each parameter, determine where and how it may be used, based on what
 `web-enumeration` observed (request schema, route source, auth state, and
@@ -207,8 +228,9 @@ the server consumes a value:
 
 Record the context alongside each input. A parameter can have more than one
 context (for example, an identifier that also appears in an error response).
-Before creating a Candidate, establish controllability from existing evidence
-or one safe, single-value baseline comparison. Keep all other request fields
+Before handing a Candidate to validation, establish controllability from existing
+evidence or one safe, single-value baseline comparison. A selected request-context
+hypothesis can remain in discovery before that handoff. Keep all other request fields
 unchanged. If the response does not show a repeatable input-related difference,
 record `control not observed` or the remaining ambiguity and do not infer use
 from the parameter name. This check does not need to identify a code sink.
@@ -349,6 +371,49 @@ does not mean deferred. An intentional dependency uses `status: deferred`
 with `deferred_reason`; enrichment preserves it. After resolving that dependency
 and before any result, explicitly use `status: queued, deferred_reason: null`.
 Recorded unresolved results keep their own recovery/retest contract.
+
+### Preserve selected request discovery
+
+If a selected Candidate lacks request context and a useful next investigation
+is feasible, record it with `status: deferred`, the actual `deferred_reason`,
+and `discovery_next_step` naming the concrete action/source and the question or
+expected observation it will resolve, not a generic "awaiting schema" reason.
+This optional Candidate field preserves actionable work even
+when its linked input has completed passive triage (`analyzed`). It is a plan,
+not evidence, an authentication claim, permission or a new validation attempt.
+Use the existing `record_candidate` identity/input_id when updating it. Omission
+preserves the step during enrichment; no field is required for inputs with no
+selected Candidate. Do not promote missing context into an operator-only blocker.
+
+Keep this work candidate-scoped rather than adding a global selected-source
+obligation merely to retain the task. Existing selected-source obligations still
+apply. Write a canonical partial handoff and let independently admitted Candidates
+proceed first; neither all schemas nor global Input Analysis completion is needed.
+Do not defer a ready Candidate while pursuing a speculative sibling.
+
+After executing the chosen investigation, reconcile its outcome before another
+discovery request: clear the completed step or replace it with a useful next step.
+A stored plan is not an instruction to replay the same action automatically.
+When runtime records `discovery_attempt_ref`, the scheduled investigation returned
+a tool result and the next action is `reconcile_discovery`, not another execution
+of the stored plan. This marker survives resume; it does not attest that the
+question was answered. Omission or re-recording the same step preserves it;
+replacing the step or clearing it explicitly closes that reconciliation.
+Update the next step only from new evidence or a
+meaningful hypothesis. Do not repeat unchanged discovery, refetch to defeat
+capture limits, or continue just to consume max_steps. When context is sufficient,
+explicitly re-record `discovery_next_step: null, status: queued, deferred_reason: null`
+before validation. If no further discovery is actionable or a real access/runtime
+dependency prevents it, clear the step with `status: deferred` and the concrete
+stop/dependency `deferred_reason`; preserve uncertainty and report incomplete.
+These planning updates apply only before any validation attempt/result and never
+replace the recovery, retest or proof contracts of an existing assessment.
+
+Artifacts must distinguish observed, documented and inferred method, field,
+media type and body context. `analyzed`, a submitted exploratory request or a
+discovery plan does not verify server consumption. Retain the actual observation
+and its limits before updating an inference; do not rewrite an old assumption
+as observed merely because a Candidate or input exists.
 
 A candidate can map to more than one suspected class; list all of them with
 independent confidence.

@@ -3,6 +3,7 @@ import json
 from copy import deepcopy
 from dataclasses import replace
 from typing import Any, cast
+from unittest.mock import AsyncMock
 from urllib.parse import urljoin
 
 import httpx
@@ -11,6 +12,7 @@ import pytest
 from src.llm.core.types import ChatRequest, FunctionCall, Message, ToolCall
 from src.permission.permission import Decision
 from src.skills.artifacts import completion_artifact_path
+from src.tools.discovery.content import ContentDiscoveryTool
 from src.workflow.assessment import resolve_sources
 from src.workflow.state import WorkflowObjective
 from tests.helpers.burp_selection import make_runtime, ORIGIN
@@ -91,6 +93,44 @@ async def test_metadata_wrong_reader_and_authorized_content_are_distinct(discove
     assert (rights.grants, rights.epoch) == authorization
     item = rt.policy.observations._items[source.retained_ref]
     assert item.candidate_id is item.attempt_id is None
+    assert not rt.workflow.candidates and not rt.workflow.attempts and not rt.workflow.evidence
+
+
+@pytest.mark.parametrize('retained', [True, False])
+async def test_native_source_wrong_reader_reports_source_kind_without_bypassing_rights(discovery, monkeypatch, retained):
+    rt, _, _, _, sent = discovery
+    tool = ContentDiscoveryTool(rt.target, rt.engagement, workflow=rt.workflow)
+    rt.agent.tools.register(tool)
+    monkeypatch.setattr('src.tools.discovery.content.sleep_or_abort', AsyncMock(return_value=True))
+    if not retained:
+        monkeypatch.setattr(rt.agent.result_retention.store, 'put', lambda *args, **kwargs: None)
+    output = await execute(rt, 'content_discovery', {'paths': ['/candidate'], 'max_requests': 3})
+    source = next(row for row in rt.workflow.discovery_sources.values() if row.kind == 'native')
+    before = deepcopy(rt.workflow.to_dict())
+    request_count = len(sent)
+    rights = dict(rt.engagement.http_permissions.grants), rt.engagement.http_permissions.epoch
+
+    wrong = await execute(rt, 'read_discovery_source', read_args(source), success=False)
+    assert wrong.status == 'error' and 'not HTTP bodies' in wrong.result
+    assert 'provenance changed' not in wrong.result
+    assert 'Do not rerun discovery' in wrong.result
+    if retained:
+        ref = json.loads(output.result)['retention']['result_ref']
+        assert source.retained_ref == ref
+        assert 'read_tool_result' in wrong.result and 'content_discovery capability' in wrong.result
+        args = {'result_ref': ref, 'start_char': 0, 'max_chars': 2000}
+        correct = await execute(rt, 'read_tool_result', args)
+        assert json.loads(correct.result)['result_ref'] == ref
+        rt.policy.revoke('content_discovery')
+        denied = await execute(rt, 'read_tool_result', args, success=False)
+        assert denied.status == 'error' and ref not in denied.result
+    else:
+        assert source.retained_ref is None
+        assert 'No retained result_ref was published' in wrong.result
+        assert 'inline output' in wrong.result and 'read_tool_result' not in wrong.result
+    assert len(sent) == request_count
+    assert rt.workflow.to_dict() == before
+    assert (rt.engagement.http_permissions.grants, rt.engagement.http_permissions.epoch) == rights
     assert not rt.workflow.candidates and not rt.workflow.attempts and not rt.workflow.evidence
 
 

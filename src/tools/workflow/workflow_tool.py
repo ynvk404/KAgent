@@ -131,7 +131,7 @@ ACTION_INPUTS = {
     'record_candidate': ('candidate_class', 'target', 'endpoint', 'method', 'parameter', 'location',
                          'test_case', 'priority', 'signals', 'baseline_request_ref', 'auth_context_ref',
                          'content_type', 'request_template', 'source_ref', 'source_skill', 'status',
-                         'input_id', 'current_phase', 'deferred_reason', 'observation_ids'),
+                         'input_id', 'current_phase', 'deferred_reason', 'discovery_next_step', 'observation_ids'),
     'record_evidence': ('candidate_id', 'evidence_path', 'observation_ids'),
     'start_validation': ('candidate_id', 'probe', 'related_requests', 'assessment'),
     'record_attempt_state': ('candidate_id', 'attempt_id', 'mutation_state', 'effect_basis',
@@ -353,6 +353,13 @@ class WorkflowTool(Tool):
                     "enum": sorted(CLEANUP_STATES),
                 },
                 "deferred_reason": optional_string,
+                "discovery_next_step": {"type": ["string", "null"], "minLength": 1, "maxLength": 600,
+                    "description": "Optional Whole-target pre-validation request discovery selected by the Agent. "
+                    "Use status=deferred with deferred_reason; name the action/source and question or expected observation, "
+                    "not a generic deferral reason. Reconcile each executed step before another discovery request. "
+                    "This is a plan, not verified request context or permission. Omission preserves it. "
+                    "Clear explicitly with null and either queued/deferred_reason=null when resolved, "
+                    "or deferred with a concrete stop/dependency reason when no further discovery is actionable."},
                 "notes": optional_string,
                 "force": {
                     "type": "boolean",
@@ -408,9 +415,17 @@ class WorkflowTool(Tool):
                 'Example: {"action":"start_validation","candidate_id":"<returned candidate.id>"}'),
             'attempt_id': 'Runtime ID from start_validation; cannot assign an attempt. Equality assertion on record_attempt_state or record_result; omit from record_evidence.',
             'assessment': 'hypothesis,criteria,limitations,completed_attempt,observed_impact,severity.',
+            'sample_payload': (
+                'Descriptive redacted request sample, not an executable validation template or replay baseline. '
+                'Identify the named input; any {INJECTION_POINT} must correspond to that parameter or field. '
+                'For JSON body context supply only the JSON body, never an HTTP request line. '
+                'Review returned sanitized context; redacted or malformed samples do not verify request structure.'),
             'evidence_path': 'Existing project proof file, written first with file_write outside artifacts/findings. Registration reads this file; it does not create it. Use returned evidence.id (ev_...) in record_result.evidence_refs, never the path.',
             'evidence_refs': 'Canonical ev_... IDs returned as evidence.id by record_evidence for this Candidate. Never a file path or obs_ ID.',
-            'request_template': 'Redacted body skeleton; mark {INJECTION_POINT}.',
+            'request_template': (
+                'Explicit redacted request skeleton, separate from sample_payload; do not promote a descriptive sample into an executable template. '
+                'Place {INJECTION_POINT}, when used, in the named input. JSON body templates contain only JSON, never an HTTP request line. '
+                'Review returned sanitized context; [REDACTED] or malformed context is not a verified request structure.'),
             'baseline_request_ref': 'Replay baseline returned by the capture-store resolver. An obs_ observation ID is not a replay baseline; omit this field when no replay capture exists. Use source_ref for matching HTTP observation provenance.',
             'source_ref': 'For selected Burp record_candidate, copy the selected retrieval ID from metadata id/source_ref (browser_capture_get.id), never runtime_observation_id (obs_...). Optional refs may be omitted only for a unique matching selection. Otherwise matching request observation provenance is checked by method/origin/path/session/epoch. An obs_ ID is not replay authority or a baseline. Whole-target input provenance must remain bound. For fields found inside another document use source_attribution.',
             'status': 'Registration/list status; not used by record_result. Omit or use queued for unstarted supported work. Explicit deferred requires deferred_reason; it is not a synonym for unconfirmed. Only start_validation owns validating.',
@@ -742,6 +757,7 @@ class WorkflowTool(Tool):
             identity_media_type=assigned.identity_media_type if assigned else None,
             status=args.get("status", "queued"),
             deferred_reason=args.get("deferred_reason"),
+            discovery_next_step=args.get("discovery_next_step"),
         )
         if assigned is not None:
             from dataclasses import replace
@@ -755,6 +771,9 @@ class WorkflowTool(Tool):
 
     def _record_candidate(self, args: dict[str, Any], policy=None) -> str:
         try:
+            step = args.get("discovery_next_step")
+            if step is not None and (not isinstance(step, str) or not step.strip() or len(step) > 600):
+                raise ValueError("discovery_next_step must be a nonempty bounded step or null")
             candidate = self.candidate_proposal(args)
             analysis_observations = []
             for ref in references(args.get("observation_ids", []), "observation_ids"):
@@ -775,6 +794,9 @@ class WorkflowTool(Tool):
                     "execution_status": item.execution_status, "terminal_evidence": False,
                 })
             existing = self.state.candidates.get(candidate.id)
+            if existing is None:
+                existing = next((row for row in self.state.candidates.values()
+                                 if self.state._media_enrichment_match(row, candidate, candidate=True)), None)
             if (self.state.objective is not None and self.state.objective.mode == "whole_target"
                     and self.state.objective_inputs() and not arg_string(args, "input_id")
                     and not any(existing is not None and existing.id in row.candidate_ids
@@ -834,6 +856,28 @@ class WorkflowTool(Tool):
                 and (existing.status == "validating" or self.state.latest_result(existing.id) is not None)):
             return self._workflow_error("registration cannot defer an active or assessed candidate", code="INVALID_DEFERRAL",
                 category="argument_error", next_action="Preserve the current attempt/result; record an honest unresolved result for an owned active attempt.")
+        # Only explicit planning updates change this work item. Input triage or
+        # candidate enrichment cannot silently close it, or reopen an assessment.
+        discovery_error = None
+        if 'discovery_next_step' in args and (step is not None or existing is not None and existing.discovery_next_step):
+            if objective is None or objective.mode != 'whole_target':
+                discovery_error = "request discovery planning requires a Whole-target objective"
+            elif existing is not None and (self.state.latest_result(existing.id) is not None
+                    or any(row.get('candidate_id') == existing.id for row in self.state.attempts.values())):
+                discovery_error = "request discovery planning cannot replace validation recovery or retest gates"
+            elif step is not None and (candidate.status != 'deferred' or not candidate.deferred_reason):
+                discovery_error = "discovery_next_step requires status=deferred and its missing-context deferred_reason"
+            elif existing is not None and existing.discovery_next_step and step is None and not (
+                    args.get('status') == 'queued' and 'deferred_reason' in args and args['deferred_reason'] is None
+                    or args.get('status') == 'deferred' and candidate.deferred_reason):
+                discovery_error = "closing request discovery requires an explicit resolved or non-actionable decision"
+        elif existing is not None and existing.discovery_next_step and (
+                'status' in args and args['status'] != 'deferred'
+                or 'deferred_reason' in args and args['deferred_reason'] is None):
+            discovery_error = "clear discovery_next_step explicitly when resolving its dependency"
+        if discovery_error:
+            return self._workflow_error(discovery_error, code="INVALID_DISCOVERY_HANDOFF", category="argument_error",
+                next_action="Preserve the existing work; record a useful authorized next step or explicitly close discovery with its actual reason.")
         try:
             reason = route.reason
             if route.kind == "generic":
@@ -853,6 +897,10 @@ class WorkflowTool(Tool):
                 # outcomes remain deferred; enrichment must obey the same rule.
                 candidate.status = "queued"
             stored, created = self.state.add_candidate(candidate, input_id=requested_input_id or None)
+            if 'discovery_next_step' in args:
+                if stored.discovery_next_step != candidate.discovery_next_step:
+                    stored.discovery_attempt_ref = None
+                stored.discovery_next_step = candidate.discovery_next_step
             input_id = arg_string(args, "input_id")
             if input_id:
                 self.state.link_input_candidate(input_id, stored.id)
@@ -1315,6 +1363,8 @@ class WorkflowTool(Tool):
             action = 'stop_recovery'
         elif owned:
             action = 'finalize_owned' if stopped else 'resume_owned'
+        elif self.state.candidate_discovery_pending(candidate):
+            action = 'reconcile_discovery' if candidate.discovery_attempt_ref else 'discover_request'
         elif candidate.deferred_reason or latest and latest.outcome in {'blocked', 'browser-required', 'authorization-required', 'deferred'}:
             action = 'resolve_dependency'
         else:
@@ -1326,6 +1376,9 @@ class WorkflowTool(Tool):
             'owned_active': owned, 'probing_stopped': stopped,
             'latest_outcome': latest.outcome if latest else None,
             'next_action': action, 'prerequisite_error': prerequisite,
+            **({'discovery_next_step': candidate.discovery_next_step,
+                'discovery_attempt_ref': candidate.discovery_attempt_ref}
+               if action in {'discover_request', 'reconcile_discovery'} else {}),
             'effects': {
                 'declaration_current': bool(owned and declaration is not None),
                 'declaration_required': bool(owned and dispatches and declaration is None),
@@ -2692,6 +2745,8 @@ class WorkflowTool(Tool):
             "priority": candidate.priority,
             "status": candidate.status,
             "deferred_reason": candidate.deferred_reason,
+            **({"discovery_next_step": candidate.discovery_next_step} if candidate.discovery_next_step else {}),
+            **({"discovery_attempt_ref": candidate.discovery_attempt_ref} if candidate.discovery_attempt_ref else {}),
             "signals": [WorkflowTool._brief(item) for item in candidate.signals[:2]],
             "baseline_request_ref": WorkflowTool._brief(
                 candidate.baseline_request_ref

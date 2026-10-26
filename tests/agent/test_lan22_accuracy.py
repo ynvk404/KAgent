@@ -52,6 +52,44 @@ def test_claim_checkpoint_reaches_both_prompt_profiles(profile):
 
 
 @pytest.mark.parametrize('profile', ['full', 'compact'])
+def test_reporting_guidance_distinguishes_counts_and_inferred_context(profile):
+    # Delivery contract only: this does not generate or validate an LLM report.
+    prompt = build_system_prompt(BuildOptions(Registry(), False, Target(ORIGIN), prompt_profile=profile))
+    checkpoint = normalized(prompt).split('# factual accuracy', 1)[1].split('# ', 1)[0]
+    for rule in (
+        r'candidate counts.{0,100}scoped workflow totals.{0,100}distinct ids',
+        r'not input counts.{0,80}page lengths',
+        r'counting unit.{0,40}exclusions',
+        r'direct.{0,60}http calls.{0,100}native discovery requests.{0,80}calibration',
+        r'owned validation requests.{0,80}phase annotations.{0,50}not.{0,50}ownership',
+        r'truncated tool previews.{0,50}not complete execution records',
+        r'retained results.{0,80}permitted readers.{0,100}omit unsupported numerical precision',
+        r'never send http.{0,60}repair reporting',
+        r'classifications.{0,60}redirects.{0,80}calibrated wildcard/spa',
+        r'analyzed inputs.{0,70}not verified request schemas.{0,40}server consumption',
+        r'response content-type.{0,40}not establish request content-type',
+    ):
+        assert re.search(rule, checkpoint), rule
+
+
+@pytest.mark.parametrize('profile', ['full', 'compact'])
+def test_reporting_guidance_requires_real_operator_context_and_severity_reasoning(profile):
+    prompt = build_system_prompt(BuildOptions(Registry(), False, Target(ORIGIN), prompt_profile=profile))
+    checkpoint = normalized(prompt).split('# factual accuracy', 1)[1].split('# ', 1)[0]
+    for rule in (
+        r'operator accounts, credentials and interactions.{0,80}actual session input.{0,40}bound exchanges',
+        r'authorizations.{0,40}runtime authorization records',
+        r'never invent.{0,100}accounts.{0,100}operator refusals',
+        r'severity remains your judgment.{0,100}justify.{0,100}assessment.{0,50}proof',
+        r'assessment criteria.{0,50}taxonomy.{0,80}demonstrated capabilities.{0,80}assumptions.{0,40}uncertainty',
+        r'potential impact ceiling.{0,80}lab identity.{0,70}does not justify severity',
+        r'unverified downstream impact conditional',
+        r'no additional exploitation.{0,60}required solely.{0,60}severity label',
+    ):
+        assert re.search(rule, checkpoint), rule
+
+
+@pytest.mark.parametrize('profile', ['full', 'compact'])
 def test_empty_coding_session_does_not_pay_for_target_assessment_guidance(profile):
     prompt = build_system_prompt(BuildOptions(Registry(), False, None, prompt_profile=profile))
     assert '# Factual accuracy' not in prompt

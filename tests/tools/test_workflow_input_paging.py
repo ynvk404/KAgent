@@ -53,6 +53,34 @@ def test_complete_bounded_traversal_and_independent_candidate_limit(count):
     assert detail["sample_payload"] == state.attack_surface_inputs[ids[0]].sample_payload
 
 
+def test_candidate_totals_are_distinct_scoped_records_not_analyzed_inputs_or_page_length():
+    # Same counting distinction exposed by lan-25, using synthetic input geometry.
+    state, tool = inventory(6)
+    for index, item in enumerate(state.objective_inputs()):
+        if index < 4:
+            proposal = Candidate("sqli", target=ORIGIN, objective_id="paging", method=item.method,
+                endpoint=item.endpoint, parameter=item.parameter, location=item.location, status="queued")
+            _, created = state.add_candidate(proposal, input_id=item.id)
+            assert created
+            assert not state.add_candidate(proposal, input_id=item.id)[1]
+        state.set_input_disposition(item.id, "analyzed", reason="Passive triage; request context remains inferred.")
+    state.add_candidate(Candidate("sqli", target=ORIGIN, objective_id="earlier", endpoint="/earlier"))
+    before = deepcopy(state.to_dict())
+
+    page = json.loads(tool._list({"limit": 2}))
+    assert page["total"] == 4 and page["returned"] == 2 and page["truncated"]
+    assert page["input_counts"]["total"] == page["input_counts"]["analyzed"] == 6
+    all_rows = json.loads(tool._list({"limit": 20}))
+    assert len({row["id"] for row in all_rows["candidates"]}) == all_rows["total"] == 4
+    for item in state.objective_inputs():
+        detail = json.loads(tool._get_input({"input_id": item.id}))
+        assert detail["input"]["disposition"] == "analyzed"
+        assert detail["provenance"]["kind"] == "unverified"
+        assert detail["input"]["source_ref"] is detail["input"]["baseline_request_ref"] is None
+    assert state.to_dict() == before
+    assert not state.attempts and not state.evidence and not state.persisted_findings
+
+
 def test_unicode_escaping_byte_budget_shrinks_count_without_cutting_json_or_ids():
     state, tool = inventory(100, wide=True)
     raw = tool._list({"view": "inputs", "input_limit": 25})

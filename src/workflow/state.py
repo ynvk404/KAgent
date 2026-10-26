@@ -265,6 +265,12 @@ class Candidate:
     # A declared dependency is distinct from an unstarted/unsupported candidate.
     # Descriptive session state only; never an authorization grant.
     deferred_reason: str | None = None
+    # Optional, agent-selected request discovery before any validation attempt.
+    # Independent of input triage; descriptive work, never evidence or authority.
+    discovery_next_step: str | None = None
+    # Runtime-owned tool-call reference: a result needs LLM reconciliation.
+    # It attests neither request context nor successful resolution.
+    discovery_attempt_ref: str | None = None
 
     def __post_init__(self) -> None:
         self.candidate_class = normalize_candidate_class(self.candidate_class)
@@ -295,6 +301,9 @@ class Candidate:
         )
         self.source_ref = _text(self.source_ref)
         self.deferred_reason = _text(self.deferred_reason)
+        self.discovery_next_step = _text(self.discovery_next_step, limit=600)
+        self.discovery_attempt_ref = (_text(self.discovery_attempt_ref, limit=200)
+                                      if self.discovery_next_step else None)
         self.source_skill = (
             normalize_metadata_name(self.source_skill) if self.source_skill else None
         )
@@ -357,6 +366,8 @@ class Candidate:
             "objective_id": self.objective_id,
             "status": self.status,
             **({"deferred_reason": self.deferred_reason} if self.deferred_reason is not None else {}),
+            **({"discovery_next_step": self.discovery_next_step} if self.discovery_next_step is not None else {}),
+            **({"discovery_attempt_ref": self.discovery_attempt_ref} if self.discovery_attempt_ref is not None else {}),
         }
 
     @classmethod
@@ -385,6 +396,8 @@ class Candidate:
                 objective_id=value.get("objective_id"),
                 status=value.get("status", "new"),
                 deferred_reason=value.get("deferred_reason"),
+                discovery_next_step=value.get("discovery_next_step"),
+                discovery_attempt_ref=value.get("discovery_attempt_ref"),
             )
         except (TypeError, ValueError):
             return None
@@ -1901,6 +1914,17 @@ class WorkflowState:
             return "confirmed finding persistence pending"
         return None
 
+    def candidate_discovery_pending(self, candidate: Candidate) -> bool:
+        """Open planning work, including outcome reconciliation after investigation."""
+        objective = self.objective
+        return bool(
+            objective is not None and objective.mode == "whole_target"
+            and self.candidate_belongs_to_objective(candidate, objective)
+            and candidate.status == "deferred" and candidate.discovery_next_step
+            and self.latest_result(candidate.id) is None
+            and not any(row.get("candidate_id") == candidate.id for row in self.attempts.values())
+        )
+
     def whole_target_status(
         self,
         *,
@@ -2005,6 +2029,9 @@ class WorkflowState:
                         actionable.append(f"candidate:{candidate.id}")
                 else:
                     blockers.append(f"candidate validator unavailable:{candidate.id}")
+                continue
+            if self.candidate_discovery_pending(candidate) and "input_analysis" in available_phases:
+                actionable.append(f"candidate-discovery:{candidate.id}")
                 continue
             if candidate.status == "deferred":
                 reason = (result.deferred_reason or result.outcome) if result else candidate.deferred_reason

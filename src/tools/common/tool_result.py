@@ -377,6 +377,17 @@ class ReadDiscoverySource(ReadHTTPObservation):
                 or objective.target_origin != self.agent.target.origin().as_url()):
             raise HTTPObservationUnavailable("Discovery content requires the active whole-target origin. Continue with other observed sources.")
         source = state.discovery_source(args["discovery_source_id"], generation=state.generation)
+        if source.kind == "native":
+            recovery = (
+                "Use read_tool_result with the published tr_ result_ref under the content_discovery capability; "
+                "that reader checks availability, permissions and provenance. "
+                if source.retained_ref else
+                "No retained result_ref was published; use the available inline output and state missing detail. "
+            )
+            raise HTTPObservationUnavailable(
+                "Native discovery tool-result sources are not HTTP bodies. " + recovery
+                + "Do not rerun discovery to repair reporting."
+            )
         item = policy.observations._items.get(source.retained_ref)
         session = policy.session_id or policy.engagement.http_permissions.session_id
         if (source.kind not in {"http", "capture"} or item is None

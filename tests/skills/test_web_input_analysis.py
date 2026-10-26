@@ -584,7 +584,8 @@ def test_examples_do_not_become_runtime_defaults(
 
 
 def test_controllability_and_reflection_context_gate_candidates(flat_lower: str) -> None:
-    assert "do not create a candidate until the inventory or a bounded observation" in flat_lower
+    assert "a candidate records a class-specific hypothesis, not a finding or a verified request schema" in flat_lower
+    assert "before handing a candidate to validation, establish controllability" in flat_lower
     assert "establish controllability from existing evidence" in flat_lower
     assert "if the response does not show a repeatable input-related difference" in flat_lower
     for context in ("html text", "attribute", "script", "url", "json", "non-rendered response"):

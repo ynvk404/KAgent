@@ -77,7 +77,11 @@ def render_action_guidance(view: ActionView, context: PlannerContext, *, owned_a
                 'and a class-specific hypothesis. Reflection, ordinary search differences and sibling endpoints do not establish SQLi. '
                 'Keep exact baseline/status/size/content, including empty data and adverse evidence; a parser error leaves SQL shape unknown. '
                 'Use input_id and get_input for canonical endpoint/source context; never drop identity after a binding error. '
-                'Unstarted supported work is queued; deferred needs an actual deferred_reason, not merely unconfirmed status.')
+                'Unstarted supported work is queued; deferred needs an actual deferred_reason, not merely unconfirmed status. '
+                'For a selected candidate with useful unresolved request discovery, record discovery_next_step; '
+                'analyzed triage does not close it. Omission preserves it; clear explicitly with null plus the resolved '
+                'queued/deferred_reason=null decision or a concrete deferred stop reason. '
+                'Inferred inputs rejected as candidates need no mandatory schema verification.')
             if context.blocked_input_count:
                 lines.append(
                     'Blocked inputs prevent complete_skill, not validation of an independent analyzed Candidate with a canonical handoff. Finish other pending triage; '

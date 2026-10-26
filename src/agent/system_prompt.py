@@ -378,11 +378,23 @@ def build_system_prompt(opts: BuildOptions) -> str:
         sb += (
             "\n# Factual accuracy\n"
             "Before artifacts/Workflow prose, narration or final synthesis, check read sources. Label observed, documented, "
-            "inferred, untested or unresolved; untested never proves absence. Match executed, not intended tests. Separate "
-            "request metadata/previews from response body. Verify method/status/response media type; keep SQL shape hypothetical. "
-            "Specify counting unit: paths, operations, HTTP requests (direct/discovery), inputs; no mixed totals. Exact IDs/current "
-            "canonical state override checkpoint prose. Empty evidence_refs do not mean raw observations absent; "
-            "registration/result/finding differ.\n"
+            "inferred, untested or unresolved; untested never proves absence. Match executed, not intended tests. "
+            "Trace operator accounts, credentials and interactions to actual session input or bound exchanges, and authorizations "
+            "to runtime authorization records. Never invent supplied accounts, credentials, authorizations, interactions or operator refusals. "
+            "Separate request metadata/previews from response body: response Content-Type does not establish request Content-Type. "
+            "Verify method/status/response media type; keep SQL shape hypothetical. Classifications must match actual redirects "
+            "and calibrated wildcard/SPA evidence. Analyzed inputs are triage records, not verified request schemas or server consumption. "
+            "Reconcile candidate counts with scoped Workflow totals and distinct IDs, not input counts or returned page lengths. "
+            "Specify counting unit and exclusions: paths, method/path operations, HTTP requests, candidates, inputs. Separate direct "
+            "HTTP calls, native discovery requests including calibration, and owned validation requests; phase annotations do not prove ownership. "
+            "Truncated tool previews are not complete execution records. Read existing retained results through permitted readers "
+            "for missing facts, or omit unsupported numerical precision; never send HTTP just to repair reporting. "
+            "Exact IDs/current canonical state and primary observations override checkpoint prose. Empty evidence_refs do not mean "
+            "raw observations absent; registration/result/finding differ. "
+            "Severity remains your judgment: briefly justify it in the existing assessment or proof using applicable assessment criteria "
+            "or taxonomy, demonstrated capabilities, assumptions and uncertainty. A vulnerability's potential impact ceiling or lab identity "
+            "alone does not justify severity; keep unverified downstream impact conditional. No additional exploitation is required solely "
+            "to justify a severity label.\n"
         )
 
     # Thêm cấu hình reasoning
@@ -561,7 +573,7 @@ def render_workflow(workflow: Optional["WorkflowState"]) -> str:
         (
             candidate
             for candidate_id, candidate in workflow.candidates.items()
-            if candidate_id in workflow.active_candidate_ids
+            if (candidate_id in workflow.active_candidate_ids or workflow.candidate_discovery_pending(candidate))
             and (objective_candidate_ids is None or candidate_id in objective_candidate_ids)
         ),
         key=lambda candidate: status_priority.get(candidate.status, 3),
@@ -642,6 +654,12 @@ def render_workflow(workflow: Optional["WorkflowState"]) -> str:
                 f"status={candidate.status} {_workflow_brief(scope)}".rstrip()
             )
             request_context: list[str] = []
+            if candidate.discovery_next_step:
+                lines.append("    discovery_next_step (plan, not evidence): "
+                             + _workflow_brief(candidate.discovery_next_step))
+                if candidate.discovery_attempt_ref:
+                    lines.append("    discovery investigated; reconcile tool result: "
+                                 + _workflow_brief(candidate.discovery_attempt_ref))
             if candidate.content_type:
                 request_context.append(f"content_type={candidate.content_type}")
             if candidate.baseline_request_ref:

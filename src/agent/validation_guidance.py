@@ -34,6 +34,26 @@ def render_validation_guidance(handoff: dict[str, Any], route: ValidationRoute |
         'Continue/compaction and reopening the same objective do not reset these counters.',
     ]
     effects = handoff.get('effects', {})
+    if action == 'reconcile_discovery':
+        lines.append(f"Investigation returned tool result {handoff.get('discovery_attempt_ref')}; "
+                     'reconcile its outcome through record_candidate before further discovery. '
+                     'The stored step is investigated, not fresh work. Do not replay it. '
+                     'Replace it only with an evidence-based next question or meaningful hypothesis; '
+                     're-recording the same step or omitting it preserves this reconciliation requirement. '
+                     'Otherwise clear it explicitly with the resolved queued/deferred_reason=null decision '
+                     'or a concrete deferred stop/dependency reason. This result grants no validation readiness. '
+                     'Ready independent validation and finding persistence take precedence.')
+        return '\n'.join(lines)
+    if action == 'discover_request':
+        lines.append('Request discovery remains open independently of completed input triage. '
+                     'Load web-input-analysis; choose a useful authorized source review or request-hypothesis probe '
+                     'for the recorded discovery_next_step. This plan is not observed request context or permission. '
+                     'Keep inferred/observed provenance explicit. After execution reconcile the outcome before another '
+                     'discovery request: clear the completed step or update it. Do not repeat unchanged discovery; update the step '
+                     'from new evidence or a meaningful hypothesis. Resolve it explicitly, or close it with the actual '
+                     'non-actionable/access dependency reason; missing schema alone is not operator-only. '
+                     'Ready independent validation and finding persistence take precedence.')
+        return '\n'.join(lines)
     if handoff['owned_active'] and effects.get('declaration_required'):
         lines.append('Effects declaration required after the latest target dispatch. A later request invalidates an earlier '
                      'no-mutation/cleanup declaration. Finish only necessary validation, then record_attempt_state from usable '

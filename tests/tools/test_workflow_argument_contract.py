@@ -44,6 +44,25 @@ def test_flat_schema_explains_actions_and_runtime_reference_ownership():
     assert not {'oneOf', 'anyOf', 'allOf', 'if', 'then', 'else'} & schema.keys()
 
 
+def test_request_context_descriptions_preserve_samples_templates_and_metadata_distinctions():
+    # These assertions protect tool guidance, not semantic payload validation.
+    properties = WorkflowTool(WorkflowState()).schema()['properties']
+    sample = properties['sample_payload']['description'].lower()
+    template = properties['request_template']['description'].lower()
+    assert 'descriptive' in sample and 'not an executable validation template or replay baseline' in sample
+    assert '{injection_point}' in sample and 'named input' in sample and 'parameter or field' in sample
+    assert 'json body' in sample and 'never an http request line' in sample
+    assert 'separate from sample_payload' in template and 'do not promote' in template
+    assert '{injection_point}' in template and 'named input' in template
+    assert 'only json' in template and 'never an http request line' in template
+    for description in (sample, template):
+        assert 'review returned sanitized context' in description
+        assert 'malformed' in description and 'verif' in description and 'request structure' in description
+    media = properties['content_type']['description'].lower()
+    assert 'request body media type' in media and 'never the response content-type' in media
+    assert 'omit for query-only requests' in media
+
+
 def test_description_examples_use_the_same_contract_and_returned_candidate_reference():
     tool = WorkflowTool(WorkflowState())
     examples = [json.loads(line) for line in tool.description().splitlines() if line.startswith('{')]

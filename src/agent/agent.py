@@ -119,6 +119,7 @@ from .decision_planner import (
     PlannerContext,
     PlannerGoal,
     build_decision_plan,
+    build_whole_target_plan,
     is_purely_informational,
     normalize,
 )
@@ -2506,7 +2507,7 @@ class Agent:
                         and latest_result.objective_id != objective.id
                     ):
                         unresolved_reasons.append(reason)
-                    elif candidate.status == "deferred" or (
+                    elif (candidate.status == "deferred" and not self.workflow.candidate_discovery_pending(candidate)) or (
                         latest_result is not None and latest_result.outcome == "deferred"
                     ):
                         deferred_reasons.append(reason)
@@ -3287,12 +3288,16 @@ class Agent:
                     evidence_count=(len(result.evidence_refs) if result else 0),
                     coverage_synced=(result.coverage_synced if result else None),
                     generic_startable=self._generic_startable(candidate),
-                    validation_ready=(workflow_tool.validation_admission_error(candidate.id, policy_for(self.prompter)) is None
+                    validation_ready=(not self.workflow.candidate_discovery_pending(candidate)
+                                      and workflow_tool.validation_admission_error(candidate.id, policy_for(self.prompter)) is None
                                       if whole_target and isinstance(workflow_tool, WorkflowTool) else None),
                     validation_complete=(direct_errors[candidate.id] is None if direct_goals else None),
                     completion_action=(self._direct_completion_action(candidate, direct_errors[candidate.id])
                                        if direct_goals else None),
                     validation_action=validation_actions.get(candidate.id),
+                    discovery_next_step=(candidate.discovery_next_step
+                                         if self.workflow.candidate_discovery_pending(candidate) else None),
+                    discovery_attempt_ref=candidate.discovery_attempt_ref,
                 )
                 for candidate in candidates
                 for result in [self.workflow.latest_result(candidate.id)]
@@ -5769,6 +5774,7 @@ class Agent:
 
         result = ""
         run_err: Exception | None = None
+        discovery_work: tuple[WorkflowState, Candidate, str, str] | None = None
 
         self.result_retention.refresh_scope()
         retention_generation = self.result_retention.scope["generation"]
@@ -5851,6 +5857,20 @@ class Agent:
                                     raise ExecutionBlocked(allowed.reason or "tool blocked by active skills")
 
                             from src.permission.runtime.invocations import controller_admission
+                            # Bind only scheduled discovery before suspension.
+                            # Sibling validation and bookkeeping do not consume
+                            # a plan. A result needs reassessment, not promotion.
+                            if (tc.function.name in {"http", "shell", "bash", "BashTool", "file_read",
+                                                     "read_http_observation", "read_discovery_source", "read_tool_result",
+                                                     "browser_capture_get"}
+                                    and any(self.workflow.candidate_discovery_pending(c)
+                                            for c in self.workflow.candidates.values())):
+                                plan = build_whole_target_plan(self.skills.list_enabled(), self._planner_context())
+                                candidate = self.workflow.candidates.get(plan.candidate_id or "") if plan else None
+                                if (plan and plan.recommended_skill == "web-input-analysis" and candidate is not None
+                                        and self.workflow.candidate_discovery_pending(candidate)
+                                        and candidate.discovery_next_step and not candidate.discovery_attempt_ref):
+                                    discovery_work = (self.workflow, candidate, candidate.discovery_next_step, runtime_scope(self))
                             with controller_admission(check_skill_admission):
                                 result = await self.tools.execute(
                                     admission_tool_name, dispatch_args, signal, self.prompter,
@@ -5961,6 +5981,17 @@ class Agent:
         receipt = getattr(run_err, 'recovery_receipt', None)
         if isinstance(receipt, RecoveryReceipt) and type(self.tools.get(tc.function.name)) is HTTPTool:
             outcome.recovery_receipt = receipt
+        process_returned = (type(self.tools.get(tc.function.name)) in {ShellTool, BashTool}
+                            and isinstance(result, ToolOutput) and result.runtime_metadata is not None
+                            and result.runtime_metadata.process in {"exit", "timeout", "cancelled"})
+        if discovery_work is not None and (status in {"success", "observation"} or process_returned):
+            state, candidate, step, scope = discovery_work
+            if (state is self.workflow and scope == runtime_scope(self)
+                    and state.candidates.get(candidate.id) is candidate
+                    and state.candidate_discovery_pending(candidate)
+                    and candidate.discovery_next_step == step and not candidate.discovery_attempt_ref):
+                candidate.discovery_attempt_ref = redact(tc.id)[:200]
+                state.mark_committed()
         return outcome
 
     def _capture_skill_load(self, tc: ToolCall, parsed: ParsedToolCall) -> None:
