@@ -4,7 +4,7 @@ import json
 import pytest
 
 from src.workflow.state import WorkflowState
-from tests.security.test_agent_assessment import setup
+from tests.security.test_agent_assessment import setup, sql_negative_comparison
 from tests.security.test_execution_policy import runtime  # noqa: F401
 
 
@@ -107,6 +107,7 @@ async def test_sql_negative_requires_established_oracle_without_false_coverage(r
 async def test_meaningful_sql_negative_remains_available(runtime, tmp_path):
     state, candidate, _, args, _ = await setup(runtime, tmp_path, candidate_class='sqli')
     registry, p, *_ = runtime
+    args = await sql_negative_comparison(runtime, tmp_path, args)
     assessment = {**args['assessment'], 'oracle_status': 'established',
                   'oracle_basis': 'Synthetic fixture controls establish an applicable, interpretable test.'}
     result = json.loads(await registry.execute('workflow', {**args, 'outcome': 'not-confirmed',

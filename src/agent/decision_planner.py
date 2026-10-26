@@ -41,6 +41,7 @@ class PlannerCandidate:
     validation_action: str | None = None
     discovery_next_step: str | None = None
     discovery_attempt_ref: str | None = None
+    retry_decision: dict[str, str] | None = None
 
 
 @dataclass(frozen=True)
@@ -295,6 +296,21 @@ def build_decision_plan(
                     and context.validation_routes.get(item.id, ValidationRoute("unavailable")).kind == "generic"]
         if awaiting:
             selected = sorted(awaiting, key=lambda item: item.id)[0]
+    if (selected is not None and context is not None
+            and context.objective_mode == "candidate_validation"
+            and selected.validation_action in {"preserve_result", "retry_declined"}):
+        # A named Candidate selects context, not permission to reopen it.
+        # Use the same current handoff as Runtime continuation guidance.
+        preserved = selected.validation_action == "preserve_result"
+        guidance = (
+            "Preserve the terminal result. Finish pending coverage, finding persistence or authorized cleanup "
+            "using the existing assessment; fresh validation requires an explicit retest or evidence revalidation."
+            if preserved else
+            "Further retry was declined for this result. Preserve its unresolved outcome and remaining obligations. "
+            "Do not repeat unchanged retry recommendations; reconsider only with a useful revised strategy through existing gates."
+        )
+        return DecisionPlan(None, f"candidate {selected.id}: {selected.validation_action}", "normal", [],
+                            "Decision planner guidance for this turn:\n" + guidance, selected.id)
     if selected is not None and context is not None and selected.id in context.validation_routes:
         route = context.validation_routes[selected.id]
         if route.kind != "expert":
@@ -709,6 +725,8 @@ def build_whole_target_plan(
             reason=(
                 f"candidate {candidate.id} evidence needs revalidation"
                 if candidate.id in context.revalidation_candidate_ids
+                else f"candidate {candidate.id} is eligible for optional retry consideration"
+                if candidate.latest_outcome == "insufficient-evidence"
                 else f"candidate {candidate.id} remains actionable in this objective"
             ),
             risk="normal",
@@ -722,6 +740,7 @@ def build_whole_target_plan(
                 f"Next candidate: {candidate.id} ({candidate.candidate_class}) via "
                 f"{validator.name}.\n"
                 "Respect the validator's authorization and evidence gates."
+                + _retry_context(candidate)
                 + " " + expert_attempt_preparation(validator.name, candidate.id)
             ),
             candidate_id=candidate.id,
@@ -836,6 +855,7 @@ def _requested_goal_plan(
                     "Decision planner guidance for this turn:\n"
                     f"Next requested goal: {goal.candidate_class}; candidate {candidate.id}.\n"
                     f"Use {validator.name} and follow its authorization and evidence gates."
+                    + _retry_context(candidate)
                     + " " + expert_attempt_preparation(validator.name, candidate.id)
                 ),
                 candidate_id=candidate.id,
@@ -885,8 +905,24 @@ def _requested_goal_plan(
 def _startable_validation(candidate: PlannerCandidate, context: PlannerContext) -> bool:
     """Use the runtime handoff; budget or status alone cannot allow recovery."""
     route = context.validation_routes.get(candidate.id)
-    return bool(candidate.validation_action == "start_validation" and route is not None
+    return bool(candidate.validation_action == "start_validation"
+                and not (candidate.retry_decision and candidate.retry_decision['decision'] == 'decline')
+                and route is not None
                 and (route.kind == "expert" or route.kind == "generic" and candidate.generic_startable is True))
+
+
+def _retry_context(candidate: PlannerCandidate) -> str:
+    if candidate.latest_outcome != 'insufficient-evidence':
+        return ''
+    return (f" Previous outcome: {candidate.latest_outcome}; evidence references: {candidate.evidence_count}; "
+            f"unresolved reason: {candidate.deferred_reason or 'not recorded'}; "
+            f"retry disposition: {candidate.retry_decision or 'not recorded'}. "
+            "Retry is optional and is not running. Decide whether existing observations support a useful revised strategy. "
+            "If so, explain it and start_validation through existing gates; otherwise call "
+            f"workflow(action=record_retry_decision, candidate_id={candidate.id}, "
+            'retry_decision={"decision":"decline","reason":"<evidence-grounded reason>"}). '
+            "No new HTTP or external event is required to make this decision. A recorded decline may be reconsidered "
+            "with a revised strategy; it does not complete validation or remove cleanup obligations.")
 
 
 def _route_plan(candidate: PlannerCandidate, route: ValidationRoute, *, revalidation=False) -> DecisionPlan:

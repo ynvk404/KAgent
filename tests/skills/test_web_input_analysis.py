@@ -601,6 +601,28 @@ def test_disposition_reasons_and_prerequisites_are_bound_to_actual_input(flat_lo
         assert contract in flat_lower
 
 
+def test_sql_candidate_selection_is_grounded_and_consistent(flat_lower: str) -> None:
+    assert 'same sqli selection criterion to authentication, search, numeric path and other inputs' in flat_lower
+    assert 'an observed sql-specific signal **or** a concrete, grounded sql hypothesis tied to this exact endpoint/input' in flat_lower
+    assert 'a syntax probe in analysis is not required' in flat_lower
+    assert 'appropriate confidence and uncertainty' in flat_lower
+    assert 'without a grounded hypothesis' in flat_lower
+    assert 'unprobed inputs remain untested, not negative sqli results' in flat_lower
+
+
+def test_authentication_candidate_handoff_preserves_probe_and_runtime_gates(flat_lower: str) -> None:
+    assert 'do not automatically probe authentication endpoints during input analysis' in flat_lower
+    assert 'does not prohibit creating a candidate for an authentication endpoint' in flat_lower
+    assert 'dedicated sqli validator validates an admitted candidate through existing scope, permission and runtime gates' in flat_lower
+    assert 'this does not authorize an analysis probe or bypass validation admission' in flat_lower
+    assert 'respect evidenced csrf, captcha, client-authentication and authorization requirements' in flat_lower
+
+
+def test_sql_candidate_selection_does_not_force_or_transfer_evidence(flat_lower: str) -> None:
+    assert 'http 401, an endpoint name, a credential-shaped parameter name, or a user request for sqli testing alone does not require a candidate' in flat_lower
+    assert 'a sqli signal or finding at another endpoint is a discovery lead, never automatic evidence for this input' in flat_lower
+
+
 def test_target_placeholder_is_only_used_as_identifier_in_output_paths(
     flat_lower: str,
 ) -> None:

@@ -66,6 +66,10 @@ Before proof/result submission, inspect the current candidate/attempt observatio
 inventory. Prefer completed, complete, non-truncated sources with the correct
 request association; reuse an existing complete control instead of recapturing
 it after choosing a truncated duplicate. Usable metadata is not impact proof.
+Declare necessary changed path/method requests with their actual roles in
+`start_validation.related_requests` before validation. A path mutation is not
+automatically primary evidence. Active declarations are immutable; undeclared
+traffic cannot be adopted by editing proof or starting a later attempt.
 Keep adverse evidence. Changed parents require corrected source proof and claims
 plus a new immutable snapshot; registration alone does not establish terminal
 eligibility. When probing stops, use the remaining budget for honest finalization;
@@ -77,46 +81,47 @@ the chosen technique is visible; unrelated later sections are not prerequisites.
 
 ## Decision checkpoint — before a probe and after its response
 
+**Observe → Hypothesize → Discriminate → Reassess.**
 **Observation → Hypothesis → Oracle → Expected Result → Falsifier → Next Decision.**
 Before each HTTP probe, check the control, hypothesis, expected marker and
-falsifier; reassess after the response. Keep this compact in reasoning; no new
-Workflow action, ledger, artifact or full query reconstruction is required.
+falsifier; reassess after its response. Keep reasoning compact; no new ledger
+or full query reconstruction is required.
 
-1. **Ground the control and hypothesis.** Identify the known benign response and
-   its stable marker, the initial signal, and the proposed SQL behavior. Separate
-   observed facts from assumptions: parser diagnostics do not reveal the complete
-   statement or implementation mechanism. Earlier Input Analysis observations
-   inform planning but remain unowned; reuse suitable owned controls instead of
-   forcing extra requests. Capture a necessary control inside the active attempt
-   only for an identified comparison.
-2. **Check compatibility and information gain.** For competing plausible shapes,
-   consider the prefix, inserted input expression and suffix together: quotes,
-   parentheses, wildcards, grouping and comments. A quoted input or matching
-   quote-containing search value does not establish a working predicate breakout.
-   Predict the observable marker under each hypothesis and what would falsify it.
-   Shapes with the same prediction supply no new information; choose a
-   discriminating bounded probe or leave the oracle unresolved.
-3. **Sequence conditional Boolean tests.** Choose a known match for an AND-filter.
-   Do not use an arbitrary nonmatching seed for an AND-filter test. If compatibility is unresolved, first check
-   whether intended TRUE preserves the expected benign marker before dispatching
-   dependent FALSE; do not blindly batch the pair. If TRUE loses that marker,
-   reassess context compatibility and the oracle. Equal empty responses do not
-   establish SQLi absence. A trailing wildcard can change an equality's truth
-   value; a parser position does not settle quote or parenthesis balance. Report
-   the pair as unexecuted if FALSE was not sent. Suitable existing observations
-   need no extra compatibility request; established pairs retain all repetition
-   and confirmation requirements. Boolean testing is not required for every Candidate.
-4. **Interpret, then continue or stop.** After an inconclusive response, compare
-   the prediction with the actual observation and revise the hypothesis/oracle
-   before another probe. Continue when another evidence-grounded, discriminating
-   test is useful and authorized within scope, permissions and runtime/operator
-   limits. There is no numeric syntax-shape adjustment cap across Input Analysis,
-   validation attempts or techniques; use their observations to inform the next
-   decision. One unsuccessful probe does not rule out every useful hypothesis.
-   Avoid equivalent probes without information gain, except required proof
-   repetitions or an identified stability question. The LLM decides whether
-   further investigation is worthwhile; no corpus exhaustion or minimum variants
-   are required. Sufficient evidence needs no additional requests.
+1. **Ground the comparison.** Separate observed facts from assumptions. Identify
+   the benign marker and actual diagnostic. Earlier analysis informs planning
+   but stays unowned; reuse suitable owned controls rather than recapturing them.
+2. **Reconstruct the local boundary:** prefix → inserted expression → suffix.
+   Keep competing shapes hypothetical; parser positions do not settle quotes,
+   parentheses or the full query.
+
+   | Boundary | Discriminating question |
+   |---|---|
+   | Quotes | Does the quote close a literal, stay escaped, or affect an identifier? |
+   | Expression | Is this a pattern, scalar expression, predicate or projection? |
+   | Parentheses/grouping | Which surrounding expression must close before this operator is legal? |
+   | Trailing syntax | What wildcard, clause, newline or delimiter remains? Does the comment start outside a literal and consume needed syntax? |
+
+3. **Test a hypothesis, not a punctuation variant.** Predict the marker and
+   falsifier for each shape. Shapes with the same prediction add no new
+   information. A diagnostic can justify materially different payload structure;
+   cosmetic variants are equivalent failed probes. If parsing rejects UNION
+   before its projection, that probe did not test the computed-output hypothesis.
+   One syntactically incorrect probe does not invalidate a technique.
+4. **For Boolean tests**, choose a known match for an AND-filter. Establish TRUE
+   before dispatching dependent FALSE; do not blindly batch. If TRUE loses that
+   marker, reassess context compatibility and the oracle. Equal empty responses
+   do not establish SQLi absence. Report the pair as unexecuted if FALSE was not
+   sent. Suitable existing observations need no extra compatibility request.
+   Boolean testing is not required for every Candidate; apply the full pair
+   checkpoint in 2a and preserve its repetition/confirmation requirements.
+5. **Reassess, then continue or stop.** Compare predictions with responses.
+   Existing observations can justify a revised strategy; no new request or
+   external event is needed just to decide. Continue a useful discriminating
+   test within scope, permissions and runtime/operator limits. There is no
+   numeric syntax-shape adjustment cap. One unsuccessful probe does not rule out
+   every useful hypothesis. Avoid equivalent probes without information gain,
+   except required proof repetitions or a stability question. No minimum variants
+   or corpus exhaustion is required. Sufficient evidence needs no additional requests.
 
 Stop when evidence is sufficient, the relevant hypothesis is adequately ruled
 out, no useful authorized test remains, or execution is blocked by runtime,
@@ -295,7 +300,9 @@ persistence. Probe again only for an identified missing validation step.
 For `not-confirmed`, the Runtime requires `assessment.oracle_status: established`
 and an observation-grounded `assessment.oracle_basis` explaining why the selected
 test is applicable and interpretable. These are your assessment, not Runtime SQL
-verification. Unknown/inconclusive compatibility stays unresolved; reassess the
+verification. A baseline alone does not establish a completed bounded negative;
+assess the actual test, context and oracle rather than counting request variants.
+Unknown/inconclusive compatibility stays unresolved; reassess the
 strategy within existing bounds rather than filling a Boolean pair or cycling
 techniques. The Runtime imposes no technique order.
 
@@ -781,7 +788,7 @@ not for every SQLi technique.
 - Use the evidence-supported quoted-string, numeric or parenthesized context,
   or a justified hypothesis; full query reconstruction is not required.
 - Choose a stable benign seed for the oracle: AND-filter tests normally need
-  a known match; OR tests may use a nonmatching seed. Reuse suitable owned
+  a known match. Do not use an arbitrary nonmatching seed for an AND-filter; OR tests may use a nonmatching seed. Reuse suitable owned
   observations rather than repeating a baseline without a stability question.
 - Check that both predicates retain their intended truth values after the
   surrounding prefix/suffix is applied. In `LIKE '%input%'`, a generic quoted
@@ -886,11 +893,19 @@ real-row reads, credentials or session material; fingerprint reads remain Phase 
 ### Bounded UNION-based controlled evaluation
 
 Prerequisites: a compatible SELECT/projection hypothesis, already known projection
-shape and an observable non-sensitive output slot. Do not discover column counts
-or types by a sequence of UNION guesses. With an owned benign control and a
-compatible projection, test only a bounded constant expression whose computed marker
-is distinguishable from reflected text and ordinary rows. A synthetic computation
-such as `7 * 7` illustrates evaluation; echoed `7 * 7` alone is not that oracle.
+shape and an observable non-sensitive output slot. Resolve local quote/grouping
+and trailing syntax using the decision checkpoint before interpreting a failed
+UNION as an output failure. Do not discover column counts or types by a sequence
+of UNION guesses.
+
+**Choose harmless expressions first.** With an owned benign control and a
+compatible projection, fill required slots with constants of compatible types;
+use one computed expression whose marker is distinguishable from reflected text
+and ordinary rows. A synthetic computation such as `7 * 7` illustrates evaluation;
+echoed `7 * 7` alone is not that oracle. Application-column selection and real-row
+reads are unnecessary when constants can answer the question. Do not substitute
+real application columns merely because a constant probe had a syntax error;
+first determine whether that probe reached its intended expression at all.
 Reproduce the evaluated result under the same context before SQLI-2 confirmation.
 Keep controls, errors and positives separate; a success/error contrast is not a
 Boolean pair. Stop at the repeatable bounded proof. If projection compatibility
@@ -1089,6 +1104,30 @@ and `insufficient-evidence` close the attempt as unresolved and keep its work
 outstanding; unavailable proof/source references may be omitted. Runtime also
 supports `browser-required` and `authorization-required` when those prerequisites
 block validation. None of these unresolved outcomes is eligible for a finding.
+
+### Closing an inconclusive attempt: make the investigation decision explicit
+
+Before `insufficient-evidence`, compress the investigation into tested hypothesis
+→ actual response → established fact → remaining uncertainty. Distinguish an
+untested alternative from a falsified hypothesis and a syntactically rejected
+probe from an interpretable negative. Check whether a low-cost, authorized,
+meaningfully different probe remains worthwhile using the boundary checkpoint.
+A potentially compatible UNION route uses harmless constants/computed expressions,
+not application rows; it is optional, not a mandatory technique.
+
+The LLM decides whether that direction is professionally useful. A justified
+stop is valid when alternatives lack an interpretable oracle, require unavailable
+prerequisites, are unsafe, exceed resources, or offer too little information.
+When further retry is unjustified, include
+`retry_decision: {"decision": "decline", "reason": "<observations and why stopping is justified>"}`
+on `record_result`. This closes the retry decision immediately without another
+turn. `insufficient-evidence` alone records neither retry nor decline. If the
+decision is made later, use `record_retry_decision` with the same object; for a
+useful revised strategy, explain it and call `start_validation` through existing
+gates (or record `decision: retry` with that strategy). Declines are session
+context, can be reconsidered, and never establish a negative result or erase
+cleanup. No minimum payload count, exhaustive syntax exploration or Finding is
+required. Do not send HTTP merely to make this decision eligible.
 
 ### Evidence-to-decision checkpoint
 

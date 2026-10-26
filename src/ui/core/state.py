@@ -675,12 +675,6 @@ def _finish_outcome(state: AppState, reason: str | None, facts: OutcomeFacts | N
     # Only authoritative workflow facts establish remaining assessment work.
     workflow_residual = bool(pending or (facts and (facts.incomplete or facts.goals or facts.blockers)))
     state = _flush_progress(state)
-    displayed_cause = ''
-    if reason == "workflow_blocked":
-        cause = facts.blockers[0] if facts and facts.blockers else pending[0] if pending else ''
-        if cause:
-            label += " · " + concise_text(cause)
-            displayed_cause = cause
     if state.pending_perm is not None:
         pending.append("permission review pending")
     if state.pending_ask is not None:
@@ -700,10 +694,9 @@ def _finish_outcome(state: AppState, reason: str | None, facts: OutcomeFacts | N
             pending.insert(0, f"{_quantity(negative, 'validation')} not confirmed")
         if facts.blockers:
             pending.append(_quantity(len(facts.blockers), "active workflow blocker"))
-    suffix_items = [item for item in pending if item != displayed_cause]
     # Preserve the redactor's field boundary. A form-like password/token at
     # the end of a blocker must not consume the following outcome counters.
-    suffix = "; " + "; ".join(suffix_items) if suffix_items else ""
+    suffix = "; " + "; ".join(pending) if pending else ""
     operations = _new_records(state, "operation")
     operation_counts: dict[str, int] = {}
     if operations:
@@ -714,9 +707,22 @@ def _finish_outcome(state: AppState, reason: str | None, facts: OutcomeFacts | N
     elif reason == "final_response" and workflow_residual:
         label = "Turn ended · work remains"
     summary = sanitize_text(label + suffix + ".")
+    if facts and facts.assessment_status:
+        saved = facts.saved_findings
+        label = "Assessment completed" if facts.completion_supported else "Assessment incomplete"
+        summary = label + " · " + _quantity(saved, "finding saved", "findings saved")
+        if facts.unresolved_obligations:
+            summary += " · " + _quantity(facts.unresolved_obligations, "unresolved obligation")
+        # Interruption causes are short; candidate identities/reasons stay in details.
+        if reason in {"cancelled", "max_steps", "runtime_error", "client_error", "context_capacity", "invalid_response"}:
+            summary += " · " + {
+                "cancelled": "cancelled", "max_steps": "step limit", "runtime_error": "runtime failure",
+                "client_error": "provider failure", "context_capacity": "context limit",
+                "invalid_response": "invalid response",
+            }[reason]
     details = TurnDetails(state.turn_number, reason, summary, saved, unsaved,
         facts.incomplete if facts else 0, facts.goals if facts else 0,
-        tuple(sanitize_text(item) for item in pending),
+        tuple(sanitize_text(item) for item in dict.fromkeys([*pending, *(facts.blockers if facts else ())])),
         tuple((sanitize_text(name), count) for name, count in operation_counts.items()))
     return replace(state, outcome_written=True,
                    latest_turn_details=details, transcript=(*state.transcript,

@@ -83,6 +83,7 @@ ACTIONS = (
     "start_validation",
     "record_attempt_state",
     "record_result",
+    "record_retry_decision",
     "sync_coverage",
     "record_phase_coverage",
     "complete_skill",
@@ -109,6 +110,7 @@ ACTION_REQUIRED = {
     'start_validation': ('candidate_id',),
     'record_attempt_state': ('candidate_id', 'mutation_state', 'effect_basis'),
     'record_result': ('candidate_id', 'skill_name', 'outcome'),
+    'record_retry_decision': ('candidate_id', 'retry_decision'),
     'sync_coverage': ('candidate_id',),
     'record_phase_coverage': ('phase', 'coverage_dimension', 'coverage_status'),
     'complete_skill': ('skill_name',),
@@ -138,7 +140,8 @@ ACTION_INPUTS = {
                              'mutation_performed', 'cleanup_state', 'cleanup_status', 'observation_ids'),
     'record_result': ('candidate_id', 'skill_name', 'outcome', 'attempt_id', 'evidence_refs',
                       'observation_ids', 'techniques', 'repeatable', 'confirmation', 'mutation_performed',
-                      'cleanup_status', 'cleanup_state', 'deferred_reason', 'notes', 'assessment', 'force'),
+                      'cleanup_status', 'cleanup_state', 'deferred_reason', 'notes', 'assessment', 'force', 'retry_decision'),
+    'record_retry_decision': ('candidate_id', 'retry_decision'),
     'sync_coverage': ('candidate_id',),
     'record_phase_coverage': ('phase', 'coverage_dimension', 'coverage_status', 'coverage_reason'),
     'complete_skill': ('skill_name', 'artifact_ref', 'no_inputs_discovered', 'current_phase'),
@@ -167,7 +170,8 @@ def describe_action_contract(properties: dict[str, Any], actions: tuple[str, ...
 
 
 def _missing_action_fields(action: str, args: dict[str, Any]) -> list[str]:
-    return [key for key in ACTION_REQUIRED.get(action, ()) if not arg_string(args, key)]
+    return [key for key in ACTION_REQUIRED.get(action, ())
+            if not (isinstance(args.get(key), dict) if key == 'retry_decision' else arg_string(args, key))]
 
 
 _STATUS_PRIORITY = {"validating": 0, "queued": 1, "new": 2}
@@ -239,6 +243,11 @@ class WorkflowTool(Tool):
                 },
                 "probe": ProbeProposal.schema(),
                 "attempt_id": optional_string,
+                "retry_decision": {"type": "object", "properties": {
+                    "decision": {"type": "string", "enum": ["retry", "decline"]},
+                    "reason": {"type": "string", "minLength": 1, "maxLength": 1000},
+                }, "required": ["decision", "reason"], "additionalProperties": False,
+                    "description": "Optional LLM disposition of a closed insufficient-evidence attempt. Evidence-grounded reason explains stopping or the revised strategy. Decline suppresses unchanged recommendations, never prohibits reconsideration. May accompany record_result or be recorded later with record_retry_decision. No new observations required; grants no authority."},
                 "related_requests": {"type": "array", "maxItems": 16, "items": {
                     "type": "object", "properties": {
                         "role": {"type": "string", "enum": ['baseline', 'control', 'trigger', 'readback', 'cleanup', 'auxiliary']},
@@ -528,7 +537,7 @@ class WorkflowTool(Tool):
             policy.bind_validation_context(self.state, self.skills, self.target)
         action = arg_string(args, "action")
         if (policy is not None and policy.session_id is not None and self.session_id != policy.session_id
-                and action in {"start_validation", "record_attempt_state", "record_evidence", "record_result"}):
+                and action in {"start_validation", "record_attempt_state", "record_evidence", "record_result", "record_retry_decision"}):
             return self._typed_result("error: workflow/runtime session identity mismatch")
         if action in {'select_source', 'get_source', 'get_endpoint', 'set_source_disposition'}:
             result = self._discovery_action(action, args)
@@ -550,6 +559,14 @@ class WorkflowTool(Tool):
             result = self._record_attempt_state(args, policy)
         elif action == "record_result":
             result = await self._record_result(args, prompter, signal)
+        elif action == "record_retry_decision":
+            try:
+                candidate_id = arg_string(args, "candidate_id")
+                self._validate_current_objective_candidate(candidate_id)
+                decision = self.state.record_retry_decision(candidate_id, args.get("retry_decision"))
+                result = json.dumps({"ok": True, "candidate_id": candidate_id, "retry_decision": decision})
+            except (ValueError, TypeError) as err:
+                result = f"error: {err}"
         elif action == "sync_coverage":
             policy = policy_for(prompter)
             latest = self.state.latest_result(arg_string(args, "candidate_id"))
@@ -1349,7 +1366,8 @@ class WorkflowTool(Tool):
         terminal = bool(latest and latest.outcome in {'confirmed', 'not-confirmed'}
                         and not (objective and objective.mode == 'candidate_validation'
                                  and latest.objective_id != objective.id)
-                        and candidate.status not in {'queued', 'validating'})
+                        and (candidate.status not in {'queued', 'validating'}
+                             or (objective and objective.mode == 'candidate_validation' and not owned)))
         stopped = bool(attempt and attempt.get('probing_stopped'))
         effects = attempt.get('effects', {}) if attempt else {}
         declaration = effects.get('declaration')
@@ -1369,12 +1387,22 @@ class WorkflowTool(Tool):
             action = 'resolve_dependency'
         else:
             action = 'repair_prerequisites' if prerequisite else 'start_validation'
+        retry_eligible = bool(action == 'start_validation' and candidate.status == 'deferred' and latest
+            and latest.outcome == 'insufficient-evidence'
+            and resolve_validation_route(self.skills, candidate.candidate_class).kind == 'expert')
+        decision = self.state.retry_decision(candidate_id)
+        if retry_eligible and decision and decision['decision'] == 'decline':
+            action = 'retry_declined'
         return {
             'candidate_id': candidate_id,
             'attempt_id': attempt['id'] if attempt else None,
             'attempt_status': attempt.get('status') if attempt else None,
             'owned_active': owned, 'probing_stopped': stopped,
             'latest_outcome': latest.outcome if latest else None,
+            'latest_reason': latest.deferred_reason or latest.notes if latest else None,
+            'evidence_refs': list(latest.evidence_refs) if latest else [],
+            'retry_eligible': retry_eligible,
+            'retry_decision': decision,
             'next_action': action, 'prerequisite_error': prerequisite,
             **({'discovery_next_step': candidate.discovery_next_step,
                 'discovery_attempt_ref': candidate.discovery_attempt_ref}
@@ -1457,13 +1485,20 @@ class WorkflowTool(Tool):
             elif policy is not None:
                 raise ValueError("skill registry unavailable for validator resolution")
             latest = self.state.latest_result(candidate_id)
+            handoff = (self.validation_handoff(candidate_id, policy)
+                       if objective is not None and objective.mode == "candidate_validation" else None)
             if (
-                not generic and objective is not None
-                and objective.mode == "whole_target"
+                objective is not None
                 and latest is not None
                 and latest.outcome in {"confirmed", "not-confirmed"}
-                and candidate.status not in {"queued", "validating"}
+                and ((not generic and objective.mode == "whole_target"
+                      and candidate.status not in {"queued", "validating"})
+                     or (objective.mode == "candidate_validation" and latest.objective_id == objective.id
+                         and not (handoff and handoff["owned_active"])))
             ):
+                # An explicit operator retest creates a new objective. Requeueing
+                # the same result or selecting its ID cannot grant another run.
+                # Keep the existing missing/invalid-evidence revalidation path.
                 evidence_required = latest.outcome == "confirmed" or bool(
                     latest.evidence_refs
                 )
@@ -1495,7 +1530,8 @@ class WorkflowTool(Tool):
                     evidence_invalid = evidence_invalid or not accepted_result(self.state, candidate, latest, policy)
                 if not evidence_invalid:
                     raise ValueError(
-                        "terminal candidate cannot be reopened during whole-target continuation; "
+                        "terminal candidate cannot be reopened during "
+                        f"{'whole-target' if objective.mode == 'whole_target' else 'candidate-validation'} continuation; "
                         "request an explicit candidate retest or repair its missing/invalid evidence"
                     )
             # No await from the final checks/observation through bookkeeping
@@ -1792,8 +1828,20 @@ class WorkflowTool(Tool):
                     "cleanup_state": args.get("cleanup_state"), "cleanup_status": args.get("cleanup_status")}
         return {k: args.get(k, v) for k, v in metadata.items()}
 
+    def _result_retry_decision(self, args: dict[str, Any]) -> dict[str, str] | None:
+        if 'retry_decision' not in args:
+            return None
+        if args.get('outcome') != 'insufficient-evidence':
+            raise ValueError('retry_decision applies only to insufficient-evidence')
+        return self.state.normalize_retry_decision(args['retry_decision'])
+
+    def _store_retry_decision(self, candidate_id: str, decision: dict[str, str] | None) -> None:
+        if decision is not None:
+            self.state.record_retry_decision(candidate_id, decision)
+
     async def _record_result(self, args: dict[str, Any], prompter: Prompter, signal: Any) -> str:
         try:
+            retry_decision = self._result_retry_decision(args)
             for reserved in ("assessment_source", "assessment_contract_version", "result_id", "assessment_binding", "evidence_manifest", "candidate_binding", "source_kind", "session_id", "objective_id"):
                 if reserved in args:
                     raise ValueError("assessment authority/identity fields are controller-owned")
@@ -1900,9 +1948,11 @@ class WorkflowTool(Tool):
                     require_cleanup_evidence(latest.evidence_manifest)
                 latest.cleanup_status, latest.cleanup_state = result.cleanup_status, result.cleanup_state
                 self.state.set_candidate_status(candidate.id, "validated" if terminal else "deferred")
+                self._store_retry_decision(candidate.id, retry_decision)
                 if latest.coverage_synced is False:
                     await self._sync_coverage(candidate, latest)
                 return json.dumps({"ok": True, "created": False, "result": latest.public_dict(),
+                    "retry_decision": self.state.retry_decision(candidate.id),
                     "eligible_for_confirm_finding": self.state.eligible_for_finding(candidate.id),
                     "coverage_sync": "synced" if latest.coverage_synced else "not-pending"})
             if terminal and (not attempt or attempt.get("status") != "active"):
@@ -1987,6 +2037,7 @@ class WorkflowTool(Tool):
             )
             stored = self.state.latest_result(result.candidate_id)
             assert stored is not None
+            self._store_retry_decision(candidate.id, retry_decision)
             if generic:
                 assert policy is not None
                 policy.generic_validation.started_candidate = None
@@ -2009,6 +2060,7 @@ class WorkflowTool(Tool):
             {
                 "ok": True,
                 "created": created,
+                "retry_decision": self.state.retry_decision(result.candidate_id),
                 "eligible_for_confirm_finding": self.state.eligible_for_finding(
                     result.candidate_id
                 ),

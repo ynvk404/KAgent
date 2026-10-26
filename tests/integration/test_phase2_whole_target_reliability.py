@@ -276,7 +276,8 @@ async def test_exhaustion_continues_only_independent_whole_target_work(runtime, 
     client = FakeClient(([response({**args, 'observation_ids': []})] if when == 'batch' else []) + [
         response({'action': 'start_validation', 'candidate_id': independent.id}, 'independent-start'),
         response({'action': 'record_result', 'candidate_id': independent.id, 'skill_name': 'sql-injection',
-            'outcome': 'insufficient-evidence', 'deferred_reason': 'offline fixture has no primary proof'}, 'independent-close'),
+            'outcome': 'insufficient-evidence', 'deferred_reason': 'offline fixture has no primary proof',
+            'retry_decision': {'decision': 'decline', 'reason': 'No usable primary proof or further bounded validation is available in this fixture.'}}, 'independent-close'),
         ChatResponse(Message('assistant', 'Incomplete assessment.'), 'stop')])
     agent = agent_for(runtime, tool, state, client)
     # Keep discovery open but unavailable so only the independent candidate is actionable.

@@ -2352,10 +2352,22 @@ class Agent:
         )
 
     def _whole_target_state(self) -> tuple[str, tuple[str, ...], tuple[str, ...]]:
+        if self.workflow.objective is None or self.workflow.objective.mode != "whole_target":
+            return "not_applicable", (), ()
+        self._reconcile_requested_goals()
+        return self.whole_target_projection()
+
+    def whole_target_projection(self) -> tuple[str, tuple[str, ...], tuple[str, ...]]:
+        """Read-only Runtime projection shared by scheduling and presentation.
+
+        Each returned action/blocker entry is one unresolved workflow obligation;
+        a Candidate and its cleanup or requested goal can be separate entries.
+        Goal reconciliation belongs to the controller, never the UI.
+        """
         objective = self.workflow.objective
         if objective is None or objective.mode != "whole_target":
             return "not_applicable", (), ()
-        goal_statuses = self._reconcile_requested_goals()
+        goal_statuses = {goal.id: goal.status for goal in objective.requested_goals}
         target_origin = self.target.origin()
         origin = target_origin.as_url() if target_origin is not None else None
         workflow_tool = self.tools.get("workflow")
@@ -2381,6 +2393,16 @@ class Agent:
                 for candidate in self.workflow.objective_candidates()
             } if isinstance(workflow_tool, WorkflowTool) else None,
             discovery_artifact_errors=self._discovery_artifact_errors(),
+            retry_candidate_ids=frozenset(
+                candidate.id for candidate in self.workflow.objective_candidates()
+                if isinstance(workflow_tool, WorkflowTool)
+                and candidate.status == 'deferred'
+                and (latest := self.workflow.latest_result(candidate.id)) is not None
+                and latest.outcome == 'insufficient-evidence'
+                and not self.workflow.source_completion_error()
+                and (handoff := workflow_tool.validation_handoff(candidate.id, execution))
+                and handoff['retry_eligible']
+            ),
             generic_eligible_candidate_ids=frozenset(
                 cid for cid, route in routes.items() if route.kind == "generic"
                 and self._generic_startable(self.workflow.candidates[cid])
@@ -2428,7 +2450,7 @@ class Agent:
         if actionable:
             return "actionable", actionable, blockers
         if blockers:
-            return "blocked", (), blockers
+            return "decision_pending" if status == "decision_pending" else "blocked", (), blockers
         return status, actionable, blockers
 
     def _reconcile_requested_goals(self) -> dict[str, str]:
@@ -3259,7 +3281,8 @@ class Agent:
         validation_actions = {
             candidate.id: handoff["next_action"] for candidate in candidates
             if (handoff := workflow_tool.validation_handoff(candidate.id, policy_for(self.prompter))) is not None
-        } if whole_target and isinstance(workflow_tool, WorkflowTool) else {}
+        } if (objective is not None and objective.mode in {"whole_target", "candidate_validation"}
+              and isinstance(workflow_tool, WorkflowTool)) else {}
         return PlannerContext(
             selected_capture_ids=tuple(row.retrieval_id for row in selection.requests) if selection else (),
             validation_routes=self._validation_routes(),
@@ -3295,6 +3318,7 @@ class Agent:
                     completion_action=(self._direct_completion_action(candidate, direct_errors[candidate.id])
                                        if direct_goals else None),
                     validation_action=validation_actions.get(candidate.id),
+                    retry_decision=self.workflow.retry_decision(candidate.id),
                     discovery_next_step=(candidate.discovery_next_step
                                          if self.workflow.candidate_discovery_pending(candidate) else None),
                     discovery_attempt_ref=candidate.discovery_attempt_ref,
@@ -4244,7 +4268,7 @@ class Agent:
                             ),
                             max_steps=max_steps,
                         )
-                    if not actionable and blockers:
+                    if not actionable and blockers and status != "decision_pending":
                         if (step < max_steps - 1 and blocked_handoff_turns < 2
                                 and (instruction := self._blocked_input_handoff_instruction())):
                             working.append(Message("system", instruction))
@@ -4495,7 +4519,7 @@ class Agent:
                         ),
                         max_steps=max_steps,
                     )
-                if not actionable and blockers:
+                if not actionable and blockers and status != "decision_pending":
                     if (step < max_steps - 1 and blocked_handoff_turns < 2
                             and (instruction := self._blocked_input_handoff_instruction())):
                         working.append(Message("system", instruction))

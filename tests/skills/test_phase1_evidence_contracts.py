@@ -8,7 +8,7 @@ import pytest
 
 from src.skills.load_skill import LoadSkillTool
 from src.skills.registry import Registry
-from tests.security.test_agent_assessment import setup
+from tests.security.test_agent_assessment import setup, sql_negative_comparison
 from tests.security.test_execution_policy import runtime  # noqa: F401
 
 
@@ -78,16 +78,14 @@ async def test_sql_ledger_retains_controls_errors_and_incomplete_captures(runtim
 async def test_sql_terminal_example_uses_production_assessment_contract(runtime, tmp_path):
     state, candidate, _, args, oid = await setup(runtime, tmp_path, candidate_class='sqli')
     registry, p, *_ = runtime
-    registered = json.loads(await registry.execute('workflow', {
-        'action': 'record_evidence', 'candidate_id': candidate.id,
-        'evidence_path': 'proof.md', 'observation_ids': [oid]}, None, p))
+    args = await sql_negative_comparison(runtime, tmp_path, args)
     text = await loaded('sql-injection')
     match = re.search(r'```python\n(.*?)\n```', text, re.S)
     assert match is not None
     expressions = ast.parse(match[1]).body
     assert len(expressions) == 1 and isinstance(expressions[0], ast.Expr)
     values = {'candidate_id': candidate.id, 'attempt_id': args['attempt_id'],
-              'sources': [oid], 'evidence_id': registered['evidence']['id'],
+              'sources': args['observation_ids'], 'evidence_id': args['evidence_refs'][0],
               'hypothesis': 'A bounded fixture input could affect a SQL query',
               'criteria': 'Compare complete fixture control and probe responses',
               'limitations': 'Synthetic contract check; no SQLi semantics established',

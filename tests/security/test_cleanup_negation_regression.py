@@ -9,7 +9,7 @@ from src.llm.core.client import Client
 from src.workflow.assessment import accepted_result, attempt_effects, digest, source_row
 from src.workflow.state import WorkflowState
 from tests.scenarios.conftest import offline_scenario
-from tests.security.test_agent_assessment import setup
+from tests.security.test_agent_assessment import setup, sql_negative_comparison
 from tests.security.test_execution_policy import runtime
 
 
@@ -72,6 +72,9 @@ async def test_negated_declaration_only_updates_owned_attempt_bookkeeping(runtim
 async def test_result_inherits_negated_declaration_without_changing_outcome(runtime, tmp_path, outcome):
     state, candidate, _, args, oid = await setup(runtime, tmp_path, candidate_class='sqli')
     registry, prompter, policy, _, sent, *_ = runtime
+    if outcome == 'not-confirmed':
+        args = await sql_negative_comparison(runtime, tmp_path, args)
+    sent_before = len(sent)
     output = await registry.execute('workflow', declaration(args, oid), None, prompter)
     assert not output.startswith('error:'), output
     submission = {key: value for key, value in args.items() if key != 'mutation_performed'}
@@ -84,7 +87,7 @@ async def test_result_inherits_negated_declaration_without_changing_outcome(runt
     assert result.cleanup_status == NEGATED_STATUS and result.attempt_id == args['attempt_id']
     assert state.eligible_for_finding(candidate.id) is (outcome == 'confirmed')
     assert accepted_result(state, candidate, result, policy) is (outcome != 'insufficient-evidence')
-    assert len(state.validation_results) == 1 and not state.persisted_findings and len(sent) == 1
+    assert len(state.validation_results) == 1 and not state.persisted_findings and len(sent) == sent_before
     assert WorkflowState.from_dict(deepcopy(state.to_dict())).to_dict() == state.to_dict()
 
 

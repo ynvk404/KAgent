@@ -34,6 +34,7 @@ class CaptureAwareClient(Client):
         self.candidate = None
         self.attempt = None
         self.observation = None
+        self.control = None
         self.evidence = None
         self.finished = False
 
@@ -100,8 +101,14 @@ class CaptureAwareClient(Client):
             assert data['ok']
             self.attempt = data['validation_context']['attempt_id']
             return self.tool('http', {'candidate_id': self.candidate, 'phase': 'validation',
-                                     'mutation_value': "first'", 'max_response_bytes': 4096})
+                                     'max_response_bytes': 4096})
         if self.stage == 6:
+            line = next(line for line in last.content.splitlines() if line.startswith('Runtime HTTP evidence ('))
+            envelope, _ = json.JSONDecoder().raw_decode(line.split(': ', 1)[1])
+            self.control = envelope['observation_id']
+            return self.tool('http', {'candidate_id': self.candidate, 'phase': 'validation',
+                                     'mutation_value': "first'", 'max_response_bytes': 4096})
+        if self.stage == 7:
             # Native HTTP returns a JSON envelope followed by the response
             # body. Its producer-issued ID is the primary evidence reference.
             assert last.name == 'http'
@@ -112,25 +119,25 @@ class CaptureAwareClient(Client):
             path = self.root / 'artifacts/sql-injection/fixture/results.md'
             return self.tool('file_write', {'path': str(path), 'content': (
                 f'# SQL injection bounded validation\nCandidate: {self.candidate}\n'
-                f'Observation: {self.observation}\nPOST /search JSON q: one quote probe.\n'
+                f'Observation: {self.control}, {self.observation}\nPOST /search JSON q: baseline and one quote probe.\n'
                 'Fixture returned the unchanged marker; SQL injection is not confirmed by this probe.\n'
                 'Only one bounded case tested; no general absence claim.\n')})
-        if self.stage == 7:
+        if self.stage == 8:
             return self.tool('workflow', {'action': 'record_evidence', 'candidate_id': self.candidate,
                 'evidence_path': 'artifacts/sql-injection/fixture/results.md',
-                'observation_ids': [self.observation]})
-        if self.stage == 8:
+                'observation_ids': [self.control, self.observation]})
+        if self.stage == 9:
             data = json.loads(last.content)
             assert data['ok']
             self.evidence = data['evidence']['id']
             return self.tool('workflow', {'action': 'record_result', 'candidate_id': self.candidate,
                 'skill_name': 'sql-injection', 'outcome': 'not-confirmed',
                 'mutation_performed': False,  # MockTransport only returns the fixed marker response.
-                'evidence_refs': [self.evidence], 'observation_ids': [self.observation],
+                'evidence_refs': [self.evidence], 'observation_ids': [self.control, self.observation],
                 'attempt_id': self.attempt, 'techniques': ['single quote probe'],
                 'assessment': {'hypothesis': 'A quote in q may cause a SQL error.',
                     'criteria': 'Observe the fixture marker/error for this single bounded probe.',
-                    'limitations': 'One mocked request; no general absence claim.',
+                    'limitations': 'Mocked baseline and probe; no general absence claim.',
                     'observed_impact': 'Fixture marker unchanged.', 'severity': 'info',
                     'completed_attempt': True, 'oracle_status': 'established',
                     'oracle_basis': 'Controlled MockTransport fixture defines a stable marker comparison; not evidence of a real SQL oracle.'}})
@@ -171,9 +178,12 @@ async def test_offline_capture_handoff_native_workflow_and_replay(runtime, selec
     slash(runtime, '/burp all' if selection == 'all' else '/burp use ' + selected['id'] if selection == 'specific' else '/burp use')
     assert runtime.policy.used == 0 and not runtime.sent and not runtime.workflow.candidates
     await runtime.agent.run('Test only the latest selected request for SQL injection', FakeSignal(), lambda _: None)
-    assert runtime.client.finished and runtime.client.stage == 9
-    assert len(runtime.sent) == 1
-    request = runtime.sent[0]
+    assert runtime.client.finished and runtime.client.stage == 10
+    assert len(runtime.sent) == 2
+    control, request = runtime.sent
+    assert control.method == 'POST' and str(control.url) == ORIGIN + '/search'
+    assert control.headers['cookie'] == 'sid=' + SECRET
+    assert json.loads(control.content) == json.loads(RAW_BODY)
     assert request.method == 'POST' and str(request.url) == ORIGIN + '/search'
     assert request.headers['cookie'] == 'sid=' + SECRET
     assert json.loads(request.content) == {'q': "first'", 'keep': 1, 'password': 'body-fixture-secret'}
@@ -230,13 +240,13 @@ async def test_selected_candidate_recovers_omitted_references_and_replays_captur
     monkeypatch.setattr(runtime.client, 'tool', tool)
     await runtime.agent.run('Test the selected request for SQL injection', FakeSignal(), lambda _: None)
     assert proposed and not proposed[0].get('baseline_request_ref')
-    assert runtime.client.finished and runtime.client.stage == 9
+    assert runtime.client.finished and runtime.client.stage == 10
     candidate = next(iter(runtime.workflow.candidates.values()))
     assert candidate.baseline_request_ref == row['baseline_request_ref']
     assert candidate.source_ref == row['id']
-    assert len(runtime.sent) == 1
-    assert runtime.sent[0].headers['cookie'] == 'sid=' + SECRET
-    assert json.loads(runtime.sent[0].content)['q'] == "first'"
+    assert len(runtime.sent) == 2
+    assert all(request.headers['cookie'] == 'sid=' + SECRET for request in runtime.sent)
+    assert [json.loads(request.content)['q'] for request in runtime.sent] == ['first', "first'"]
     assert [q.tool for q in runtime.operator.requests] == ['http_capture_credentials']
     assert runtime.operator.requests[0].force_operator and runtime.operator.requests[0].no_session_cache
     saved = runtime.agent.store.load()
@@ -267,7 +277,7 @@ async def test_selected_candidate_original_baseline_read_uses_native_replay(runt
                 assert response.message.tool_calls
                 tool_call = response.message.tool_calls[0]
                 args = json.loads(tool_call.function.arguments)
-                args.pop('mutation_value')
+                args.pop('mutation_value', None)
                 tool_call.function.arguments = json.dumps(args)
             return response
     client = BaselineClient(runtime.client.root)

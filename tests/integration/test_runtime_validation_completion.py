@@ -16,7 +16,7 @@ from src.workflow.assessment import accepted_result
 from src.workflow.state import Candidate, WorkflowMode, WorkflowState
 from tests.helpers.agent_fakes import FakeClient, FakeSignal, collect
 from tests.helpers.workflow import record_phase_coverage_for_test
-from tests.security.test_agent_assessment import setup
+from tests.security.test_agent_assessment import setup, sql_negative_comparison
 from tests.security.test_execution_policy import ORIGIN, runtime  # noqa: F401
 
 
@@ -25,6 +25,8 @@ async def validated(runtime, tmp_path, *, candidate_class="sqli", outcome="confi
     assert state.objective is not None
     state.objective.mode = mode
     state.objective.add_requested_goal(candidate.candidate_class)
+    if candidate_class == 'sqli' and outcome == 'not-confirmed':
+        args = await sql_negative_comparison(runtime, tmp_path, args)
     output = await runtime[0].execute("workflow", {**args, "outcome": outcome}, None, runtime[1])
     assert json.loads(output)["ok"], output
     return state, candidate, tool, {**args, "outcome": outcome}
@@ -217,6 +219,7 @@ async def test_custom_validator_operational_dependency_keeps_canonical_gate(runt
 
 async def test_missing_validator_registry_cannot_reopen_accepted_terminal_work(runtime, tmp_path):
     state, candidate, tool, _ = await validated(runtime, tmp_path, outcome="not-confirmed", mode="whole_target")
+    sent_before = len(runtime[4])
     agent = agent_for(runtime, state, tool)
     tool.skills = None
     status, actionable, blockers = agent._whole_target_state()
@@ -226,7 +229,7 @@ async def test_missing_validator_registry_cannot_reopen_accepted_terminal_work(r
     assert agent._terminal_candidate_probe_blocker("http", {
         "method": "GET", "url": "/fixture?q=fixture",
     }) is not None
-    assert len(runtime[4]) == 1
+    assert len(runtime[4]) == sent_before
 
 
 async def test_reporting_failure_does_not_revoke_accepted_result_or_completion(runtime, tmp_path, monkeypatch):

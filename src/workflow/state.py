@@ -1166,6 +1166,8 @@ class WorkflowState:
     attempts: dict[str, dict[str, Any]] = field(default_factory=dict)
     # Submission repair accounting, separate from immutable attempt declarations.
     evidence_recovery: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # Session decisions, bound to a result revision; never execution authority.
+    retry_decisions: dict[str, dict[str, Any]] = field(default_factory=dict)
     selected_sources: dict[str, dict[str, Any]] = field(default_factory=dict)
     evidence_sources: dict[str, list[str]] = field(default_factory=dict)
     mutation_lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False, compare=False)
@@ -1175,6 +1177,45 @@ class WorkflowState:
     def mark_committed(self) -> None:
         """Make a canonical mutation checkpoint-eligible before the next await."""
         self.committed_revision += 1
+
+    @staticmethod
+    def normalize_retry_decision(value: Any) -> dict[str, str]:
+        if (not isinstance(value, dict) or set(value) != {"decision", "reason"}
+                or not isinstance(value.get("decision"), str)
+                or value.get("decision") not in {"retry", "decline"}):
+            raise ValueError("retry_decision requires decision=retry|decline and an evidence-grounded reason")
+        reason = _text(value.get("reason"), limit=_MAX_NOTES_LENGTH)
+        if not reason:
+            raise ValueError("retry_decision requires an evidence-grounded reason; retry describes the revised strategy")
+        return {"decision": value["decision"], "reason": reason}
+
+    def retry_decision(self, candidate_id: str) -> dict[str, str] | None:
+        from .assessment import candidate_binding
+        candidate = self.candidates.get(candidate_id)
+        result = self.latest_result(candidate_id)
+        row = self.retry_decisions.get(candidate_id)
+        if (not candidate or candidate.status == "validating"
+                or not result or result.outcome != "insufficient-evidence" or not row
+                or row.get("objective_id") != (self.objective.id if self.objective else None)
+                or row.get("candidate_binding") != candidate_binding(candidate)
+                or row.get("result_fingerprint") != validation_result_fingerprint(result)):
+            return None
+        return self.normalize_retry_decision({key: row.get(key) for key in ("decision", "reason")})
+
+    def record_retry_decision(self, candidate_id: str, value: Any) -> dict[str, str]:
+        from .assessment import candidate_binding
+        decision = self.normalize_retry_decision(value)
+        candidate = self.candidates[candidate_id]
+        result = self.latest_result(candidate_id)
+        if result is None or result.outcome != "insufficient-evidence" or candidate.status == "validating":
+            raise ValueError("retry decision requires a closed insufficient-evidence result")
+        self.retry_decisions[candidate_id] = {
+            **decision, "objective_id": self.objective.id if self.objective else None,
+            "candidate_binding": candidate_binding(candidate),
+            "result_fingerprint": validation_result_fingerprint(result),
+        }
+        self.mark_committed()
+        return decision
 
     def objective_sources(self) -> tuple[SourceRecord, ...]:
         objective = self.objective
@@ -1937,8 +1978,14 @@ class WorkflowState:
         validation_errors: dict[str, str | None] | None = None,
         validation_admission_errors: dict[str, str | None] | None = None,
         discovery_artifact_errors: dict[str, str] | None = None,
+        retry_candidate_ids: frozenset[str] = frozenset(),
     ) -> tuple[str, tuple[str, ...], tuple[str, ...]]:
-        """Return status, actionable work, and blockers for the active objective."""
+        """Return status, executable work, and blockers for the active objective.
+
+        retry_candidate_ids comes from the current Runtime handoff, including
+        admission and recovery gates. decision_pending means an eligible retry
+        lacks an LLM disposition; it is not an executable or mandatory retry.
+        """
         objective = self.objective
         if objective is None or objective.mode != "whole_target":
             return "not_applicable", (), ()
@@ -1950,6 +1997,7 @@ class WorkflowState:
             return "blocked", (), ("active target origin changed",)
 
         actionable: list[str] = []
+        decisions: list[str] = []
         blockers: list[str] = []
         if self.discovery_restore_invalid:
             blockers.append(self.source_completion_error() or 'discovery metadata restore failed')
@@ -2033,6 +2081,13 @@ class WorkflowState:
             if self.candidate_discovery_pending(candidate) and "input_analysis" in available_phases:
                 actionable.append(f"candidate-discovery:{candidate.id}")
                 continue
+            if candidate.id in retry_candidate_ids:
+                decision = self.retry_decision(candidate.id)
+                if decision is None:
+                    decisions.append(candidate.id)
+                elif decision["decision"] == "retry":
+                    actionable.append(f"candidate:{candidate.id}")
+                    continue
             if candidate.status == "deferred":
                 reason = (result.deferred_reason or result.outcome) if result else candidate.deferred_reason
                 blockers.append(f"candidate deferred:{candidate.id}:{reason or 'condition not recorded'}")
@@ -2098,6 +2153,9 @@ class WorkflowState:
 
         if actionable:
             return "actionable", tuple(actionable), tuple(blockers)
+        if decisions:
+            # Consideration is an LLM decision, not an executable validation.
+            return "decision_pending", (), tuple(blockers)
         if blockers:
             return "blocked", (), tuple(blockers)
         if all(phase in completed for phase in REQUIRED_WHOLE_TARGET_PHASES):
@@ -2242,6 +2300,7 @@ class WorkflowState:
         self.objective = None
         self.attempts.clear()
         self.evidence_recovery.clear()
+        self.retry_decisions.clear()
         self.selected_sources.clear()
         self.evidence_sources.clear()
         self.candidates.clear()
@@ -2266,6 +2325,7 @@ class WorkflowState:
         self.scanner_observations = dict(other.scanner_observations)
         self.attempts = deepcopy(other.attempts)
         self.evidence_recovery = deepcopy(other.evidence_recovery)
+        self.retry_decisions = deepcopy(other.retry_decisions)
         self.selected_sources = deepcopy(other.selected_sources)
         self.evidence_sources = deepcopy(other.evidence_sources)
         self.version = other.version
@@ -2299,6 +2359,7 @@ class WorkflowState:
             "version": self.version,
             "attempts": deepcopy(self.attempts),
             "evidence_recovery": deepcopy(self.evidence_recovery),
+            "retry_decisions": deepcopy(self.retry_decisions),
             "selected_sources": deepcopy(self.selected_sources),
             "evidence_sources": deepcopy(self.evidence_sources),
             "objective": self.objective.to_dict() if self.objective else None,
@@ -2366,6 +2427,18 @@ class WorkflowState:
         state.objective = WorkflowObjective.from_dict(value.get("objective"))
         from src.workflow.evidence.recovery import restored_budgets
         state.evidence_recovery = restored_budgets(value.get("evidence_recovery"), state.attempts)
+        raw_decisions = value.get("retry_decisions", {})
+        if isinstance(raw_decisions, dict):
+            for key, row in raw_decisions.items():
+                if not isinstance(key, str) or not isinstance(row, dict):
+                    continue
+                try:
+                    decision = state.normalize_retry_decision({k: row.get(k) for k in ("decision", "reason")})
+                except ValueError:
+                    continue
+                if all(isinstance(row.get(k), str) for k in ("candidate_binding", "result_fingerprint")):
+                    state.retry_decisions[key] = {**decision, **{k: row.get(k) for k in
+                        ("objective_id", "candidate_binding", "result_fingerprint")}}
 
         raw_candidates = value.get("candidates", [])
         if isinstance(raw_candidates, dict):

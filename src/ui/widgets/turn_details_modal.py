@@ -33,6 +33,9 @@ class TurnDetailsModal:
             text.append("Completed operations (successful operation records):\n", style=BOLD_ACCENT)
             text.append("\n".join(f"  {sanitize_text(name)} ({count})" for name, count in details.completed_operations)
                         or "  None recorded", style="")
+            if details.remaining:
+                text.append("\n\nAssessment details:\n", style=BOLD_ACCENT)
+                text.append("\n".join(f"  {sanitize_text(item)}" for item in details.remaining), style="")
         text.append("\n\nLatest snapshot from this UI session. Cleared by /clear or /reset.\n"
                     "Historical diagnostics are unavailable after resume.", style=ui.muted)
         return text

@@ -5,7 +5,7 @@ from copy import deepcopy
 from pathlib import Path
 
 import pytest
-from tests.helpers.workflow import run_workflow_fixture, bind_capture_baseline
+from tests.helpers.workflow import run_workflow_fixture, bind_capture_baseline, sql_negative_fixture
 
 from src.coverage.store import CoverageStore
 from src.coverage.context import CoverageContext
@@ -1945,10 +1945,11 @@ async def test_candidate_validation_objective_scopes_validation_mutations(tmp_pa
         "evidence_path": "proof.txt",
     }, None, AlwaysAllow())
 
-    result = json.loads(await run_workflow_fixture(tool, {
+    comparison = await sql_negative_fixture(tool, candidate_a.id, AlwaysAllow())
+    result = json.loads(await tool.run({
         "action": "record_result", "candidate_id": candidate_a.id,
         "skill_name": "sql-injection", "outcome": "not-confirmed",
-        "evidence_refs": [evidence["evidence"]["id"]],
+        **comparison,
     }, None, AlwaysAllow()))
     assert result["ok"] is True
     assert "candidate does not match the active candidate-validation objective" in await run_workflow_fixture(tool, {

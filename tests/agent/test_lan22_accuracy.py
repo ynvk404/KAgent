@@ -213,8 +213,14 @@ async def test_tui_omits_empty_reason_without_changing_unresolved_outcome(offlin
     result.deferred_reason = reason
     before = rt.workflow.to_dict()
     facts = runtime_facts(rt.agent, None, ())
-    assert any('insufficient-evidence' in row for row in facts.blockers)
-    assert ('Reason:' in '\n'.join(facts.blockers)) is bool(reason and reason.strip())
+    # Final blocker entries/counts now come from the same read-only Runtime
+    # projection as termination, rather than a separate UI outcome projection.
+    assert facts.blockers == rt.agent.whole_target_projection()[2]
+    if reason and reason.strip():
+        assert reason.strip() in '\n'.join(facts.blockers)
+    else:
+        assert 'Reason:' not in '\n'.join(facts.blockers)
+    assert result.outcome == 'insufficient-evidence'
     assert rt.workflow.to_dict() == before and facts.incomplete == 1 and facts.validations == 0
 
 

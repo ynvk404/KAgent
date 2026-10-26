@@ -29,7 +29,11 @@ def freeze(run_id, case_id, execution_id, session_id, candidate_id, state, polic
 def projection(raw: dict) -> WorkflowState:
     """Strict hydration for inspection only; do not use resume's lossy migration."""
     expected_keys = set(WorkflowState().to_dict())
-    if not isinstance(raw, dict) or set(raw) != expected_keys or raw['version'] != 8:
+    # Pre-Retry v8 omits only this optional session metadata. The fresh
+    # projection already defaults it to {}; never migrate the frozen input.
+    if (not isinstance(raw, dict)
+            or set(raw) not in (expected_keys, expected_keys - {'retry_decisions'})
+            or raw['version'] != 8):
         raise ValueError('unsupported frozen workflow schema')
     state = WorkflowState()
     state.objective = WorkflowObjective.from_dict(raw['objective'])

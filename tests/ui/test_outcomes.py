@@ -639,5 +639,9 @@ def test_validation_without_impact_and_blocked_summary_use_only_available_facts(
     rows = [entry.text for entry in state.transcript if entry.text.startswith('Validation ')]
     assert rows == ['Validation confirmed · GET /search · input q']
     final = state.transcript[-1].text
-    assert final.startswith('Blocked · POST /login · input email: authorization required')
+    assert final.startswith('Blocked;') and 'POST /login' not in final
     assert 'short-secret' not in final and '1 incomplete validation;' in final
+    assert state.latest_turn_details is not None
+    details = '\n'.join(state.latest_turn_details.remaining)
+    assert 'POST /login · input email: authorization required' in details
+    assert 'short-secret' not in details

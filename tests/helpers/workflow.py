@@ -181,6 +181,34 @@ class FixtureWorkflowToolMixin:
         return await parent.run(args, signal, prompter)
 
 
+async def sql_negative_fixture(tool, candidate_id, prompter):
+    """Consumer fixture with owned captures and production proof registration."""
+    import json
+    from types import SimpleNamespace
+    from urllib.parse import urljoin
+    from src.permission.runtime.execution import policy_for
+    candidate = tool.state.candidates[candidate_id]
+    attempt = tool.state.attempts[tool.active_attempt]
+    owner = {key: attempt[key] for key in ('id', 'candidate_id', 'candidate_binding', 'session_id', 'objective_id', 'epoch')}
+    policy = policy_for(prompter)
+    store = policy.observations if policy else tool.observations
+    ids = []
+    for value in ('control', 'test'):
+        action = SimpleNamespace(epoch=attempt['epoch'], method=candidate.method or 'GET',
+            url=urljoin(candidate.target, candidate.endpoint) + '?q=' + value,
+            transport_address='fixture', digest='fixture-' + value, response_cap=65536)
+        ids.append(store.capture(action, 200, b'Controlled fixture response', complete=True, owner=owner))
+    path = tool.evidence_root / 'fixture-negative.md'
+    path.write_text('Offline comparison.\nobservation_ids: ' + ', '.join(ids))
+    registered = json.loads(await tool.run({'action': 'record_evidence', 'candidate_id': candidate_id,
+        'evidence_path': str(path), 'observation_ids': ids}, None, prompter))
+    return {'attempt_id': attempt['id'], 'evidence_refs': [registered['evidence']['id']], 'observation_ids': ids,
+        'assessment': {'hypothesis': 'Bounded fixture SQL hypothesis', 'criteria': 'Compare fixture control and test',
+            'limitations': 'Synthetic consumer fixture, not live SQL evidence', 'observed_impact': 'No fixture differential',
+            'severity': 'info', 'completed_attempt': True, 'oracle_status': 'established',
+            'oracle_basis': 'Controlled fixture defines an applicable comparison.'}}
+
+
 async def prepare_validation_prerequisites(tool, candidate_id: str) -> None:
     """Explicit consumer fixture for the approved Whole-target new-attempt gate.
 

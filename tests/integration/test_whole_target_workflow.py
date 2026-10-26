@@ -193,13 +193,10 @@ async def test_whole_target_pipeline_reaches_completion_through_runtime_state(tm
     await run_workflow_fixture(workflow_tool, {
         "action": "start_validation", "candidate_id": candidate_id,
     }, None, AlwaysAllow())
-    (tmp_path / "negative-proof.md").write_text("Bounded fixture analysis")
-    proof_id = json.loads(await workflow_tool.run({
-        "action": "record_evidence", "candidate_id": candidate_id,
-        "evidence_path": "negative-proof.md",
-    }, None, AlwaysAllow()))["evidence"]["id"]
-    result = json.loads(await run_workflow_fixture(workflow_tool, {
-        "evidence_refs": [proof_id],
+    from tests.helpers.workflow import sql_negative_fixture
+    comparison = await sql_negative_fixture(workflow_tool, candidate_id, AlwaysAllow())
+    result = json.loads(await workflow_tool.run({
+        **comparison,
         "action": "record_result", "candidate_id": candidate_id,
         "skill_name": "sql-injection", "outcome": "not-confirmed",
         # Fixed consumer response bytes; this fixture performs no target writes.

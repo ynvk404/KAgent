@@ -5,7 +5,7 @@ import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urljoin, urlsplit
 
 from src.agent.events import AgentEvent, SkillActiveEvent, ToolCallEvent, ToolResultEvent
@@ -43,6 +43,9 @@ class OutcomeFacts:
     stale_event: bool = False
     overview: str = ""
     completion_supported: bool = False
+    assessment_status: str = ""
+    unresolved_obligations: int = 0
+    saved_findings: int = 0
 
 
 def _evidence_summary(result) -> str:
@@ -172,7 +175,7 @@ def runtime_facts(agent: Any, event: AgentEvent | None, calls: tuple[PendingCall
             incomplete += 1
             pending.append("validation incomplete")
             continue
-        if result.cleanup_state in {"pending", "failed", "requires-user-action"}:
+        if result.cleanup_state in {"pending", "failed", "requires-user-action", "unknown", "not-attempted"}:
             pending.append("cleanup " + result.cleanup_state)
             blockers.append(f"{label}: cleanup {result.cleanup_state}")
         if result.coverage_synced is False:
@@ -332,6 +335,20 @@ def runtime_facts(agent: Any, event: AgentEvent | None, calls: tuple[PendingCall
                 label = f" ({severity})" if severity in {"info", "low", "medium", "high", "critical"} else ""
                 milestones.append((candidate.id + ":" + validation_result_fingerprint(result), "finding",
                                    f"Finding saved · {concise_text(receipt[1])}{label}\n  {sanitize_text(receipt[2])}"))
+    assessment_status = ""
+    unresolved_obligations = 0
+    saved_findings = sum(workflow.finding_is_persisted(candidate.id) for candidate in candidates)
+    projection = getattr(agent, 'whole_target_projection', None)
+    snapshot = projection() if objective and objective.mode == 'whole_target' and callable(projection) else None
+    if isinstance(snapshot, tuple) and len(snapshot) == 3:
+        assessment_status, actions, runtime_blockers = cast(tuple[str, tuple[str, ...], tuple[str, ...]], snapshot)
+        # Counting unit: one entry in the Runtime's action/blocker projection.
+        # Candidate validation, cleanup, phases and goals are distinct obligations.
+        unresolved_obligations = len(actions) + len(runtime_blockers)
+        blockers = [sanitize_text(item) for item in runtime_blockers]
+        completion_supported = assessment_status == 'completed'
     return OutcomeFacts(scope, tuple(milestones), tuple(dict.fromkeys(pending)), validations,
                         tuple(dict.fromkeys(records)), activity, incomplete, goals, tuple(dict.fromkeys(blockers)),
-                        activity_skill, overview=overview, completion_supported=completion_supported)
+                        activity_skill, overview=overview, completion_supported=completion_supported,
+                        assessment_status=assessment_status, unresolved_obligations=unresolved_obligations,
+                        saved_findings=saved_findings)

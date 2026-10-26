@@ -28,7 +28,7 @@ ASSESSMENT = {"hypothesis": "A bounded fixture response supports this candidate"
               "oracle_basis": "Controlled synthetic fixture supplies an applicable interpretable comparison; not live SQL evidence."}
 
 
-async def setup(runtime, tmp_path, *, candidate_class="xss", related=None, method="GET", payload="fixture", mode: WorkflowMode="whole_target", extra_skills=()):
+async def setup(runtime, tmp_path, *, candidate_class="xss", related=None, method="GET", payload="fixture", mode: WorkflowMode="whole_target", extra_skills=(), endpoint="/fixture", location=None):
     from urllib.parse import urlencode
     registry, prompter, policy, _, _, _, target = runtime
     skills = Skills()
@@ -38,7 +38,7 @@ async def setup(runtime, tmp_path, *, candidate_class="xss", related=None, metho
     state = WorkflowState(objective=WorkflowObjective("assessment-objective", "direct" if mode == "candidate_validation" else mode, ORIGIN))
     assert state.objective is not None
     candidate, _ = state.add_candidate(Candidate(candidate_class=candidate_class,
-        target=ORIGIN, endpoint="/fixture", method=method, parameter="q", location="body" if method == 'POST' else "query",
+        target=ORIGIN, endpoint=endpoint, method=method, parameter="q", location=location or ("body" if method == 'POST' else "query"),
         objective_id=state.objective.id))
     if mode == "candidate_validation":
         state.objective.mode = mode
@@ -51,9 +51,9 @@ async def setup(runtime, tmp_path, *, candidate_class="xss", related=None, metho
     started = json.loads(await registry.execute("workflow", {"action": "start_validation",
         "candidate_id": candidate.id, "related_requests": related or []}, None, prompter))
     assert started["ok"]
-    request: dict[str, Any] = {"url": "/fixture?" + urlencode({'q': payload}), "method": method, "phase": "validation"}
+    request: dict[str, Any] = {"url": endpoint if location == 'path' else endpoint + "?" + urlencode({'q': payload}), "method": method, "phase": "validation"}
     if method == 'POST':
-        request.update(url='/fixture', body=urlencode({'q': payload}),
+        request.update(url=endpoint, body=urlencode({'q': payload}),
                        headers={'Content-Type': 'application/x-www-form-urlencoded'})
     await registry.execute("http", request, None, prompter)
     oid = next(reversed(policy.observations._items))
@@ -68,6 +68,18 @@ async def setup(runtime, tmp_path, *, candidate_class="xss", related=None, metho
     return state, candidate, tool, args, oid
 
 
+async def sql_negative_comparison(runtime, tmp_path, args):
+    """Give terminal SQLi consumer tests an owned, proof-bound comparison."""
+    registry, p, policy, *_ = runtime
+    await registry.execute('http', {'url': '/fixture?q=fixture-control', 'phase': 'validation'}, None, p)
+    ids = [*args['observation_ids'], next(reversed(policy.observations._items))]
+    (tmp_path / 'negative-proof.md').write_text('Synthetic control/test comparison.\nobservation_ids: ' + ', '.join(ids))
+    proof = json.loads(await registry.execute('workflow', {'action': 'record_evidence',
+        'candidate_id': args['candidate_id'], 'evidence_path': 'negative-proof.md',
+        'observation_ids': ids}, None, p))
+    return {**args, 'observation_ids': ids, 'evidence_refs': [proof['evidence']['id']]}
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("candidate_class", ["sqli", "xss"])
 @pytest.mark.parametrize("outcome", ["confirmed", "not-confirmed"])
@@ -75,6 +87,8 @@ async def test_terminal_agent_assessment_without_verifier(runtime, tmp_path, can
     state, candidate, _, args, _ = await setup(runtime, tmp_path, candidate_class=candidate_class)
     registry, p, policy, operator, _, _, _ = runtime
     assert not policy.observations._verifiers
+    if candidate_class == 'sqli' and outcome == 'not-confirmed':
+        args = await sql_negative_comparison(runtime, tmp_path, args)
     payload = json.loads(await registry.execute("workflow", {**args, "outcome": outcome}, None, p))
     assert payload["result"]["outcome"] == outcome
     latest = state.latest_result(candidate.id)

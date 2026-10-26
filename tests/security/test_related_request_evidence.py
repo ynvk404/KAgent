@@ -32,6 +32,11 @@ async def test_primary_payload_and_identity_variations_are_observations(runtime,
     assert {(str(req.url), req.method) for req in sent} == {(ORIGIN + "/fixture", "POST")}
     assert len({req.content for req in sent}) == 3
     assert state.attempts[args["attempt_id"]]["related_requests"] == []
+    (tmp_path / 'comparison.md').write_text('Owned fixture comparison.\nobservation_ids: ' + ', '.join(args['observation_ids']))
+    proof = json.loads(await registry.execute('workflow', {'action': 'record_evidence',
+        'candidate_id': candidate.id, 'evidence_path': 'comparison.md',
+        'observation_ids': args['observation_ids']}, None, p))
+    args['evidence_refs'] = [proof['evidence']['id']]
     # This checks source admissibility, not vulnerability-specific semantics.
     output = json.loads(await registry.execute("workflow", {**args, "outcome": "not-confirmed"}, None, p))
     assert len(output["result"]["evidence_manifest"]) == 3

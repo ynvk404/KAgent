@@ -54,11 +54,12 @@ async def test_direct_completed_last_step_has_consistent_instruction(runtime, tm
     agent.client = client
     events = collect()
     before = deepcopy(state.to_dict())
+    sent_before = len(runtime[4])
     await agent.run("continue", FakeSignal(), events["sink"], AgentRunOptions(max_steps=1))
     assert events["events"][-1]["stop_reason"] == "final_response"
     assert not agent._validation_completion_blockers()
     assert "The objective is incomplete/partial" not in synthesis_instruction(client)
-    assert len(client.requests) == 2 and len(runtime[4]) == 1
+    assert len(client.requests) == 2 and len(runtime[4]) == sent_before
     assert state.validation_results[0].to_dict() == before["validation_results"][0]
 
 
@@ -142,13 +143,14 @@ async def test_direct_planner_selects_unfinished_sibling_local_obligation(runtim
     agent = agent_for(runtime, state, tool)
     context = agent._planner_context()
     before = deepcopy(state.to_dict())
+    sent_before = len(runtime[4])
     assert agent._validation_completion_error(first, runtime[2]) is None
     plan = build_decision_plan("continue", agent.skills.list_enabled(), agent.target, context)
     assert plan is not None and plan.candidate_id == second.id
     assert plan.recommended_skill is None
     expected = {"finding": "confirm_finding", "coverage": "sync_coverage", "cleanup": "cleanup"}[obligation]
     assert expected in plan.guidance
-    assert state.to_dict() == before and len(runtime[4]) == 2
+    assert state.to_dict() == before and len(runtime[4]) == sent_before
 
 
 async def test_direct_local_finding_executes_without_retesting_completed_sibling(runtime, tmp_path):
@@ -164,6 +166,7 @@ async def test_direct_local_finding_executes_without_retesting_completed_sibling
     agent.client = client
     results = [deepcopy(r.to_dict()) for r in state.validation_results]
     attempts = deepcopy(state.attempts)
+    sent_before = len(runtime[4])
     plan = build_decision_plan("continue", agent.skills.list_enabled(), agent.target, agent._planner_context())
     assert plan is not None and plan.candidate_id == second.id and plan.recommended_skill is None
     events = collect()
@@ -172,7 +175,7 @@ async def test_direct_local_finding_executes_without_retesting_completed_sibling
     assert state.finding_is_persisted(second.id) and not state.finding_is_persisted(first.id)
     assert [r.to_dict() for r in state.validation_results] == results and state.attempts == attempts
     assert build_decision_plan("continue", agent.skills.list_enabled(), agent.target, agent._planner_context()) is None
-    assert len(runtime[4]) == 2 and len(client.requests) == 2
+    assert len(runtime[4]) == sent_before and len(client.requests) == 2
 
 
 async def test_direct_completed_sibling_does_not_keep_operator_cleanup_actionable(runtime, tmp_path):
@@ -184,9 +187,10 @@ async def test_direct_completed_sibling_does_not_keep_operator_cleanup_actionabl
     agent._reconcile_requested_goals()
     assert not agent._has_actionable_requested_goal()
     events = collect()
+    sent_before = len(runtime[4])
     await agent.run("continue", FakeSignal(), events["sink"], AgentRunOptions(max_steps=20))
     assert events["events"][-1]["stop_reason"] == "workflow_blocked"
-    assert len(agent.client.requests) == 2 and len(runtime[4]) == 2
+    assert len(agent.client.requests) == 2 and len(runtime[4]) == sent_before
 
 
 async def test_direct_operator_cleanup_outside_completed_goal_keeps_assigned_work(runtime, tmp_path):
@@ -201,9 +205,10 @@ async def test_direct_operator_cleanup_outside_completed_goal_keeps_assigned_wor
     assert [g.status for g in state.objective.requested_goals] == ["tested_not_confirmed"]
     assert not agent._has_actionable_requested_goal()
     events = collect()
+    sent_before = len(runtime[4])
     await agent.run("continue", FakeSignal(), events["sink"], AgentRunOptions(max_steps=20))
     assert events["events"][-1]["stop_reason"] == "workflow_blocked"
-    assert len(agent.client.requests) == 2 and len(runtime[4]) == 2
+    assert len(agent.client.requests) == 2 and len(runtime[4]) == sent_before
     state.add_candidate(Candidate("xss", target=ORIGIN, endpoint="/independent",
                                   objective_id=state.objective.id))
     assert agent._has_actionable_requested_goal()
@@ -251,13 +256,14 @@ async def test_direct_pending_work_stays_incomplete_even_with_final_response(run
     agent = agent_for(runtime, state, tool)
     client = SummaryClient(("workflow", {"action": "list"}))
     agent.client = client
+    sent_before = len(runtime[4])
     stop = await synthesize(agent, reason=reason)
     assert stop == ("workflow_blocked" if reason == "final_response" else reason)
     assert "incomplete/partial" in synthesis_instruction(client)
     assert "sql-injection" in agent.history[-1].content and extra.id in agent.history[-1].content
     assert "tested_not_confirmed" in agent.history[-1].content
     assert agent._validation_completion_error(sql, runtime[2]) is None
-    assert len(state.validation_results) == 1 and len(runtime[4]) == 1
+    assert len(state.validation_results) == 1 and len(runtime[4]) == sent_before
 
 
 @pytest.mark.parametrize("damage", ["proof", "seal", "foreign-result"])
@@ -326,6 +332,14 @@ async def test_whole_target_partial_synthesis_retains_results_blockers_and_check
     await complete_input_analysis(tool)
     if reason == "workflow_blocked":
         await agent._close_terminal_attempt("max_steps", FakeSignal(), collect()["sink"], agent.history.copy())
+        # This case tests blocked synthesis after a deliberate stop. An
+        # automatic inconclusive closure alone leaves retry consideration open.
+        decision = await runtime[0].execute('workflow', {
+            'action': 'record_retry_decision', 'candidate_id': xss.id,
+            'retry_decision': {'decision': 'decline',
+                'reason': 'The fixture has no usable proof or meaningful remaining validation strategy.'},
+        }, FakeSignal(), runtime[1])
+        assert json.loads(decision)['ok']
     sql_result = agent.workflow.latest_result(sql.id)
     assert sql_result is not None
     before_sql = deepcopy(sql_result.to_dict())

@@ -341,7 +341,10 @@ def test_nonterminal_outcome_requires_canonical_record_and_keeps_recorded_reason
     dispatch(app, DoneEvent(stop_reason='workflow_blocked'))
     completion = app.state.transcript[-1]
     assert completion.kind == 'warning'
-    assert 'Recorded constraint' in completion.text and 'short-secret' not in completion.text
+    assert 'Recorded constraint' not in completion.text and 'short-secret' not in completion.text
+    assert app.state.latest_turn_details is not None
+    details = '\n'.join(app.state.latest_turn_details.remaining)
+    assert 'Recorded constraint' in details and 'short-secret' not in details
     assert 'candidate deferred' not in completion.text
     assert '1 active workflow blocker' in completion.text
 

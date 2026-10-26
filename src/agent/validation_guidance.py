@@ -34,6 +34,19 @@ def render_validation_guidance(handoff: dict[str, Any], route: ValidationRoute |
         'Continue/compaction and reopening the same objective do not reset these counters.',
     ]
     effects = handoff.get('effects', {})
+    if action == 'retry_declined':
+        lines.append(f"Further retry explicitly declined: {handoff.get('retry_decision')}. "
+                     'Preserve the unresolved result; do not repeat the same retry decision. '
+                     'If a useful revised strategy is identified, explicitly reconsider with record_retry_decision '
+                     '(decision=retry and reason describing it), or explain the strategy and start_validation '
+                     'through existing admission/permission gates. This is not a permanent retest prohibition.')
+        return '\n'.join(lines)
+    if handoff.get('retry_eligible'):
+        lines.append(f"Previous outcome: insufficient-evidence; reason: {str(handoff.get('latest_reason') or 'not recorded')[:160]}; "
+                     f"evidence_refs={handoff.get('evidence_refs', [])[:3]}; retry_decision={handoff.get('retry_decision')}. "
+                     'Retry is optional, not running. Decide from existing observations: revised strategy → start_validation, '
+                     'or record_retry_decision(retry_decision={decision: decline, reason: <grounded reason>}). '
+                     'insufficient-evidence alone is neither retry nor decline.')
     if action == 'reconcile_discovery':
         lines.append(f"Investigation returned tool result {handoff.get('discovery_attempt_ref')}; "
                      'reconcile its outcome through record_candidate before further discovery. '
@@ -92,7 +105,10 @@ def render_validation_guidance(handoff: dict[str, Any], route: ValidationRoute |
             lines.append(f'Reload load_skill(name="{skill}") before validation probes/proof work; '
                          'skill activation expires per turn and grants no authority.')
         if skill == 'sql-injection':
-            if action in {'start_validation', 'resume_owned'}:
+            if action == 'start_validation' and handoff.get('retry_eligible'):
+                lines.append('Reassess SQL boundaries and the oracle for a meaningful revised hypothesis; '
+                             'prefer harmless computed expressions where applicable; no automatic probe or required technique.')
+            elif action in {'start_validation', 'resume_owned'}:
                 lines.append('Choose technique by context/oracle; control in active attempt. Reuse suitable observations. Full query text is not required. '
                              'Observation → Hypothesis → Oracle → Expected Result → Falsifier → Next Decision: '
                              'competing SQL prefix/input/suffix shapes with same prediction add no information. '

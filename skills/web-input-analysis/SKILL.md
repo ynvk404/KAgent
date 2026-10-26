@@ -177,7 +177,10 @@ when they can advance a selected Candidate. An exploratory request may test an
 explicitly inferred method, media type or body; it does not make that schema
 observed or establish server acceptance. Never fabricate credentials, tokens or
 sessions, or present a hypothesized body as a captured request. Do not automatically
-probe authentication endpoints. Respect evidenced CSRF, CAPTCHA, client-authentication and authorization
+probe authentication endpoints during Input Analysis. This probing restriction
+does not prohibit creating a Candidate for an authentication endpoint; the
+dedicated SQLi validator validates an admitted Candidate through existing
+scope, permission and Runtime gates. Respect evidenced CSRF, CAPTCHA, client-authentication and authorization
 requirements; `blocked` remains appropriate for a genuine unmet prerequisite.
 These probes resolve request context, not exploitability: retain the signal-tier
 bounds below and all existing scope, permission, capture and resource limits.
@@ -350,8 +353,27 @@ message alone is not that evidence.
 
 ## 4. Map signals to a suspected vulnerability class
 
-For each candidate, form a reasoned suspicion, not a conclusion. The built-in
-validators handle these classes:
+For each candidate, form a reasoned suspicion, not a conclusion.
+
+Apply the same SQLi selection criterion to authentication, search, numeric path
+and other inputs: an observed SQL-specific signal **or** a concrete, grounded
+SQL hypothesis tied to this exact endpoint/input can justify a Candidate.
+For example, source/documentation identifying a credential lookup and its
+controllable lookup value can ground a specific SQL lookup hypothesis; keep the
+proposed database and query behavior hypothetical. A syntax probe in
+Analysis is not required. If probing is restricted here but that hypothesis is
+grounded, record the Candidate with appropriate confidence and uncertainty and
+hand validation to the dedicated validator. This does not authorize an Analysis
+probe or bypass validation admission.
+
+HTTP 401, an endpoint name, a credential-shaped parameter name, or a user request
+for SQLi testing alone does not require a Candidate. A SQLi signal or finding at
+another endpoint is a discovery lead, never automatic evidence for this input.
+Without a grounded hypothesis, record that there is insufficient reason to
+create a Candidate and describe the actual coverage gap; unprobed inputs remain
+untested, not negative SQLi results.
+
+The built-in validators handle these classes:
 
 | Context / signal | Suspected class |
 |---|---|

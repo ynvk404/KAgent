@@ -41,7 +41,7 @@ async def test_recoverable_expert_precedes_generic_blocker_in_every_insertion_or
     ids = dict(zip('ABC', (exhausted, recoverable, blocked)))
     rt.workflow.candidates = {ids[key]: rt.workflow.candidates[ids[key]] for key in order}
     context = rt.agent._planner_context()
-    assert context.workflow_status == 'blocked'
+    assert context.workflow_status == 'decision_pending'
     assert rt.workflow_tool.validation_handoff(exhausted, rt.policy)['next_action'] == 'stop_recovery'
     assert rt.workflow_tool.validation_handoff(recoverable, rt.policy)['next_action'] == 'start_validation'
     before = deepcopy(rt.workflow.to_dict())
