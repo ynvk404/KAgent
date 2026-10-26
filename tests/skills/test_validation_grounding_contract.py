@@ -1,11 +1,17 @@
 """Loaded playbook instruction contracts; these do not verify LLM behavior."""
 from pathlib import Path
+import hashlib
+import json
 import re
 
 import pytest
 
 from src.skills.load_skill import LoadSkillTool
 from src.skills.registry import Registry
+from src.permission.permission import AlwaysAllow
+from src.tools.common.outcome import ToolOutput
+from src.tools.skills.payloads import ReadPayloadsTool
+from src.tools.skills.paths import MAX_BYTES, MAX_PREVIEW_BYTES
 
 
 @pytest.fixture
@@ -51,7 +57,7 @@ async def test_xss_context_and_transformation_remain_bounded_without_execution_i
     loaded = ' '.join((await LoadSkillTool(skills).run({'name': 'cross-site-scripting'})).split())
     for contract in ('neither `<html>` nor `<body>` wrappers are required',
                      'a prior close variant is not a stopping rule',
-                     'new observations support a different meaningful prediction', 'every delimiter',
+                     'existing or new observations support a different meaningful prediction', 'every delimiter',
                      'Compare distinct captured requests', 'Content-Type, surrounding syntax',
                      'encoding, inert context and CSP',
                      'Neither raw reflection nor HTML fragment parsing alone establishes execution',
@@ -207,3 +213,77 @@ async def test_source_first_handoff_preserves_request_and_operator_distinctions(
                      'missing schema is a discovery gap', 'separate questions', 'csrf', 'captcha',
                      'client-authentication', 'genuine unmet prerequisite'):
             assert rule in loaded
+
+
+@pytest.mark.parametrize('name', ['sql-injection', 'cross-site-scripting'])
+async def test_loaded_reasoning_allows_existing_ambiguous_evidence_without_inventing_proof(skills, name):
+    loaded = ' '.join((await LoadSkillTool(skills).run({'name': name})).split()).lower()
+    checkpoint = loaded.split('## decision checkpoint', 1)[1].split('## runtime completion contract', 1)[0]
+    assert 'observe → hypothesize → discriminate → predict → execute → interpret → reassess → decide' in checkpoint
+    assert 'ambiguous existing observations' in checkpoint
+    assert 'competing hypotheses' in checkpoint
+    assert 'browser-required' in loaded and 'insufficient-evidence' in loaded
+    assert re.search(r'synthetic.{0,70}not.{0,50}session evidence', loaded)
+    assert 'planning' in loaded and 'owned' in loaded and 'captured' in loaded
+    if name == 'sql-injection':
+        assert 'no precise parser error is required' in checkpoint
+        assert 'new http observation is not required to reconsider existing evidence' in loaded
+        assert 'base interpretations on executed requests and actual responses, not predicted results' in loaded
+    else:
+        assert 'no new http observation is needed merely to reconsider' in checkpoint
+        assert 'never reconstruct it or use an inadmissible capture as terminal proof' in loaded
+        assert 'do not become owned proof for this attempt' in loaded
+    for stale_gate in ('when new observations support', 'needs new observations',
+                       'without using the returned parser position/message'):
+        assert stale_gate not in loaded
+
+
+@pytest.mark.parametrize('name', ['sql-injection', 'cross-site-scripting'])
+@pytest.mark.parametrize('limit', [13, 5000])
+async def test_new_context_examples_are_delivered_verbatim_through_bounded_resources(skills, name, limit):
+    tool = ReadPayloadsTool(skills)
+    raw_bytes = (Path(__file__).resolve().parents[2] / 'skills' / name / 'payloads.txt').read_bytes()
+    assert len(raw_bytes) <= MAX_BYTES
+    raw = raw_bytes.decode('utf-8')
+    args = {'skill': name, 'file': 'payloads.txt', 'limit': limit}
+    chunks = []
+    offset = 0
+    while True:
+        output = await tool.run(args, None, AlwaysAllow())
+        assert isinstance(output, ToolOutput)
+        rendered, footer = output.rsplit('\nContinuation: ', 1)
+        page = json.loads(footer)
+        assert page['start_char'] == offset
+        assert page['sha256'] == hashlib.sha256(raw_bytes).hexdigest()
+        assert page['end_char'] > offset
+        body = rendered.split('\n', 1)[1][:page['end_char'] - offset]
+        assert body == raw[offset:page['end_char']]
+        assert len(body.encode('utf-8')) <= MAX_PREVIEW_BYTES
+        chunks.append(body)
+        offset = page['end_char']
+        if page['next_start_char'] is None:
+            assert not output.truncated
+            break
+        assert output.truncated
+        call = json.loads(rendered.splitlines()[0].split('Next page: ', 1)[1])
+        assert call['tool'] == 'read_payloads'
+        args = call['arguments']  # Never invent offsets or source identities.
+    delivered = ''.join(chunks)
+    assert delivered == raw
+
+    if name == 'sql-injection':
+        phase1 = delivered.split('PHASE 1 — DETECTION', 1)[1].split('PHASE 2 — VALIDATION', 1)[0]
+        line = next(line for line in phase1.splitlines() if line.startswith("'))  "))
+        payload, note = re.split(r' {2,}# purpose: ', line, maxsplit=1)
+        assert payload == "'))" and '# purpose:' not in payload
+        assert 'applies:' in note and 'limit:' in note
+        assert 'no diagnostic counting layers required' in note
+        assert 'syntax compatibility only, not SQLI-2' in note
+    else:
+        phase2 = delivered.split('PHASE 2 — CONTEXT-SPECIFIC CONFIRMATION', 1)[1]
+        for payload in ("><script>document.title='xsspoc-{MARKER}'</script>",
+                        "${document.title='xsspoc-{MARKER}'}"):
+            # The reader preserves separate annotation lines; they are not input.
+            entry = phase2.split('\n' + payload + '\n', 1)[1].split('\n\n', 1)[0]
+            assert all(line.startswith('    # ') for line in entry.splitlines())
+            assert all(field in entry for field in ('purpose:', 'applies:', 'limit:'))

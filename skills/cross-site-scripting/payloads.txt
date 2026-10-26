@@ -93,7 +93,7 @@ xsspoc{TIMESTAMP}"'<>                 # purpose: marker followed by the four cha
 # not complete executable proof. If evidence shows deterministic removal of
 # one trailing character, a grounded same-context adaptation can test it:
 # append one inert trailing character to the selected execution payload, then inspect
-# the returned complete syntax. New observations may justify further adaptation
+# the returned complete syntax. Existing or new observations may justify further adaptation
 # with a distinct prediction after a prior variant; there is no numeric variant cap.
 # Avoid equivalent probes and payload spraying. Stop when evidence suffices, the
 # hypothesis is adequately ruled out, no useful authorized test remains or execution
@@ -113,7 +113,7 @@ xsspoc{TIMESTAMP}"'<>                 # purpose: marker followed by the four cha
     # purpose: event-handler-based close variant for HTML body context
     # applies: captured source specifically shows script-tag stripping while other tags/attributes pass unescaped; tests that evidenced sanitization hypothesis, not an assumed execution failure or WAF bypass
     # note: src=x must actually fail image loading for onerror to fire; HTTP reflection alone does not establish that event or execution
-    # limit: test the evidenced sanitization hypothesis; further adaptation needs new observations and a meaningful prediction under SKILL.md's checkpoint, not arbitrary tag/attribute combinations
+    # limit: test the evidenced sanitization hypothesis; further adaptation needs a meaningful prediction from existing or new observations under SKILL.md's checkpoint, not arbitrary tag/attribute combinations
 
 # --- HTML attribute context ---------------------------------------------
 "><script>document.title='xsspoc-{MARKER}'</script>
@@ -126,7 +126,12 @@ xsspoc{TIMESTAMP}"'<>                 # purpose: marker followed by the four cha
     # purpose: single-quote variant of the attribute breakout above
     # applies: same as above, for single-quoted attribute values
     # note: a quote inside an escaped value, inert enclosing element or incomplete returned tag does not establish breakout
-    # limit: use for an observed single-quoted attribute; a failed probe alone does not justify changing quote style
+    # limit: use for a supported single-quoted hypothesis; a failed double-quote probe does not settle an ambiguous delimiter, so reconsider existing source and predict the distinction
+
+><script>document.title='xsspoc-{MARKER}'</script>
+    # purpose: end an unquoted attribute's tag before the script
+    # applies: unquoted value is observed or justified among competing delimiter hypotheses; inspect the entire returned tag and suffix
+    # limit: tests that boundary, not every quote variant; enclosing context, policy and SKILL.md's deterministic proof conditions still apply
 
 # --- JavaScript string context -------------------------------------------
 ';document.title='xsspoc-{MARKER}';//
@@ -139,6 +144,11 @@ xsspoc{TIMESTAMP}"'<>                 # purpose: marker followed by the four cha
     # purpose: double-quote variant of the above
     # applies: same as above, for double-quoted JS string literals
     # limit: same browser-required caveat as above
+
+${document.title='xsspoc-{MARKER}'}
+    # purpose: expression substitution inside a JavaScript template literal
+    # applies: evidenced backtick-delimited template source with an unescaped interpolation boundary, not an ordinary quoted string
+    # limit: inspect complete surrounding source, backslashes and newlines; source reflection/parse acceptance alone is not execution, retain browser-required when needed
 
 # --- URL / href / src context ---------------------------------------------
 # Select this only when captured context supports a potentially executable scheme

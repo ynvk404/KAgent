@@ -23,9 +23,16 @@ from enum import Enum
 from html import unescape
 from html.parser import HTMLParser
 from pathlib import Path
+import asyncio
+import re
+import shutil
+import subprocess
 from urllib.parse import urlsplit
 
 import pytest
+
+from src.skills.load_skill import LoadSkillTool
+from src.skills.registry import Registry
 
 
 @pytest.fixture(scope="module")
@@ -495,7 +502,7 @@ def test_fragment_transformation_requires_complete_same_context_variant():
     for rule in ('neither `<html>` nor `<body>` wrappers are required',
                  'An incomplete executable payload must not be confirmed',
                  'a prior close variant is not a stopping rule',
-                 'new observations support a different meaningful prediction'):
+                 'existing or new observations support a different meaningful prediction'):
         assert rule in prose
     corpus = asyncio.run(ReadPayloadsTool(skills).run(
         {'skill': 'cross-site-scripting', 'file': 'payloads.txt'}, None, AlwaysAllow()))
@@ -617,3 +624,155 @@ def test_corpus_stored_and_dom_notes_respect_existing_capability_checkpoint(payl
         'adds no DOM variants or substitute execution',
     ):
         assert concept in payloads_text
+
+
+@pytest.fixture(scope='module')
+def loaded_xss():
+    registry = Registry()
+    registry.load_dir(Path(__file__).resolve().parents[2] / 'skills')
+    return asyncio.run(LoadSkillTool(registry).run({'name': 'cross-site-scripting'}))
+
+
+class SourceTokens(HTMLParser):
+    """Local attribute/text fixtures only, not an HTML5 browser or XSS oracle."""
+
+    def __init__(self, source):
+        super().__init__()
+        self.tags = []
+        self.data = []
+        self.comments = []
+        self.feed(source)
+        self.close()
+
+    def handle_starttag(self, tag, attrs):
+        self.tags.append((tag, dict(attrs)))
+
+    def handle_data(self, data):
+        self.data.append(data)
+
+    def handle_comment(self, data):
+        self.comments.append(data)
+
+
+@pytest.mark.parametrize('row', range(4), ids=['double', 'single', 'unquoted', 'entity-quote'])
+def test_loaded_attribute_examples_match_full_assembly_and_attribute_decoding(loaded_xss, row):
+    lines = [line for line in loaded_xss.splitlines() if line.startswith('| `<input value=')]
+    assert len(lines) == 4
+    template, submitted, returned = re.findall(r'`([^`]+)`', lines[row])[:3]
+    assert template.replace('{input}', submitted) == returned
+    tokens = SourceTokens(returned)
+    assert len(tokens.tags) == 1
+    tag, attrs = tokens.tags[0]
+    assert tag == 'input' and attrs['data-tail'] == 't'
+    if row == 3:
+        assert 'data-probe' not in attrs
+        assert attrs['value'] == 'm" data-probe="yes'
+    else:
+        assert attrs['value'] == 'm' and attrs['data-probe'] == 'yes'
+    # All four are attribute/data observations; this fixture claims no execution.
+    assert all(tag != 'script' for tag, _ in tokens.tags)
+
+
+def test_html_backslash_does_not_escape_a_delimiter_and_wrong_quote_can_stay_data():
+    tokens = SourceTokens('<input value="m\\" data-probe="yes" data-tail="t">')
+    assert tokens.tags == [('input', {'value': 'm\\', 'data-probe': 'yes', 'data-tail': 't'})]
+    tokens = SourceTokens("<input value='m\" data-probe=\"yes' data-tail='t'>")
+    assert 'data-probe' not in tokens.tags[0][1]
+
+
+def test_loaded_nested_html_js_and_url_examples_decode_one_layer(loaded_xss):
+    handler_match = re.search(r'`(<button onclick="[^`]+</button>)`', loaded_xss)
+    assert handler_match is not None
+    source = handler_match[1]
+    tokens = SourceTokens(source)
+    handler = tokens.tags[0][1]['onclick']
+    assert handler == "show('x');document.title='xsspoc-demo7';//')"
+    assert '&#39;' in source and '&#39;' not in handler
+    anchor_match = re.search(r'`(<a href="javascript:[^`]+</a>)`', loaded_xss)
+    assert anchor_match is not None
+    anchor = anchor_match[1]
+    href = SourceTokens(anchor).tags[0][1]['href']
+    assert href == "javascript:document.title='xsspoc-demo7'"
+    assert urlsplit(href).scheme == 'javascript'
+    encoded = SourceTokens('<a href="javascript%3Adocument.title=1">go</a>').tags[0][1]['href']
+    assert urlsplit(encoded).scheme == ''  # HTML attribute decoding adds no percent decode.
+
+
+def test_loaded_transformations_are_source_changes_not_execution_events(loaded_xss):
+    section = loaded_xss.split('**Transformations:', 1)[1].split('## 3. Confirm', 1)[0]
+    rows = [re.findall(r'`([^`]+)`', line)[:2] for line in section.splitlines()
+            if line.startswith('| `')]
+    encoded, escaped, stripped, attributes, clipped, url = rows
+    assert encoded == ['<b>m</b>', '&lt;b&gt;m&lt;/b&gt;']
+    tokens = SourceTokens(encoded[1])
+    assert tokens.tags == [] and tokens.data == ['<b>m</b>']
+    assert escaped == ["'", "\\'"]
+    assert [tag for tag, _ in SourceTokens(stripped[0]).tags] == ['script', 'b']
+    assert SourceTokens(stripped[1]).tags == [('b', {})]
+    assert 'onerror' in SourceTokens(attributes[0]).tags[0][1]
+    assert SourceTokens(attributes[1]).tags == [('img', {'src': 'x'})]
+    assert clipped[0][:-1] == clipped[1]
+    assert url[0] == 'javascript%3Adocument.title=1'
+    prose = ' '.join(section.lower().split())
+    assert 'if capture is truncated, the missing bytes are unknown' in prose
+    assert 'never reconstruct it or use an inadmissible capture as terminal proof' in prose
+
+
+@pytest.fixture(scope='module')
+def js_sources(loaded_xss):
+    match = re.search(r'```javascript\s*\n(.*?)```', loaded_xss, re.S)
+    assert match is not None
+    block = match[1]
+    return dict(re.findall(r'const (\w+)=(.*);', block))
+
+
+def check_js_syntax(source):
+    # Parse only: no vm.run*, DOM, browser, document stub or execution event.
+    node = shutil.which('node')
+    if node is None:
+        pytest.skip('Optional syntax-only JavaScript checks require an existing node binary')
+    return subprocess.run([node, '--check', '--input-type=commonjs'], input=source,
+                          text=True, capture_output=True, timeout=5, check=False)
+
+
+@pytest.mark.parametrize('name', ['single', 'double', 'escaped', 'template', 'interpolation'])
+def test_loaded_javascript_assemblies_parse_without_executing(js_sources, name):
+    result = check_js_syntax('const ' + name + '=' + js_sources[name] + ';')
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize(('replacement', 'valid'), [('first\nsecond', False),
+                                                    (r'first\nsecond', True),
+                                                    ('first\\\nsecond', True)])
+def test_javascript_physical_newline_escape_and_continuation_differ(js_sources, replacement, valid):
+    source = 'const single=' + js_sources['single'].replace('xsspoc-demo7', replacement) + ';'
+    assert (check_js_syntax(source).returncode == 0) is valid
+
+
+def test_javascript_line_comment_does_not_consume_a_next_line_suffix(js_sources):
+    source = 'const single=' + js_sources['single'] + ';'
+    # A physical newline exposes the application's otherwise commented quote.
+    source = source.replace("//';", "//\n';")
+    assert check_js_syntax(source).returncode != 0
+    template = 'const template=' + js_sources['template'].replace('xsspoc-demo7', 'first\nsecond') + ';'
+    assert check_js_syntax(template).returncode == 0
+
+
+def test_loaded_dom_stored_and_policy_traces_keep_the_missing_proof_explicit(loaded_xss):
+    text = ' '.join(loaded_xss.split()).lower()
+    dom = text.split('**dom trace', 1)[1].split('**stored trace', 1)[0]
+    for concept in ('source', 'transformation', 'sink', 'fragment insertion/dom mutation',
+                    'execution evidence still missing', 'does not prove the branch ran',
+                    'innerhtml', 'textcontent', 'browser-required'):
+        assert concept in dom
+    stored = text.split('**stored trace', 1)[1].split('**response policy', 1)[0]
+    assert stored.index('acceptance') < stored.index('readback') < stored.index('rendering')
+    for concept in ('reported write, not persistence', 'declared rendering response',
+                    'separately authorized cleanup and verification', 'ownership',
+                    'browser-required', 'cleanup cannot be verified'):
+        assert concept in stored
+    policy = text.split('**response policy', 1)[1].split('**3a.', 1)[0]
+    for concept in ('application/json', 'text/plain', 'text/html', "script-src 'none'",
+                    'report-only', 'does not enforce blocking', 'embedding/sandbox',
+                    'needs its interaction', 'do not simulate an event'):
+        assert concept in policy

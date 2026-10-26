@@ -82,13 +82,23 @@
 # logic, which starts in Phase 2.)
 
 '                           # purpose: single quote, classic string-context break | applies: any string-context parameter | limit: syntax probe only, no query logic injected
-"                           # purpose: double quote, for double-quoted string contexts | applies: params rendered in double-quoted SQL strings | limit: syntax probe only
+"                           # purpose: double-quote boundary hypothesis | applies: existing context supports a double-quoted string or identifier, depending on DBMS/mode | limit: syntax probe only; acceptance does not identify which context
 ')                          # purpose: quote + closing paren, e.g. WHERE id=('$id') | applies: compatible quoted, parenthesized input, not necessarily a function | limit: syntax probe only
+'))                         # purpose: quoted input in two grouping layers hypothesis | applies: nesting is plausible from existing context and the test can distinguish competing shapes; no diagnostic counting layers required | limit: syntax compatibility only, not SQLI-2; account for remaining suffix per SKILL.md 1b
 ")                          # purpose: double-quote variant of the above | applies: same as above, double-quoted variant | limit: syntax probe only
-`                           # purpose: backtick, MySQL identifier-quote context | applies: MySQL-suspected targets or unknown engine | limit: syntax probe only
+`                           # purpose: backtick, MySQL identifier-quote context | applies: MySQL identifier hypothesis supported by existing context | limit: syntax probe only; an unknown engine alone is not a reason to cycle delimiters
 ;                           # purpose: statement terminator, some drivers/engines surface a distinct error | applies: any candidate; also used to gauge stacked-query support | limit: syntax probe only, do not chain a second statement here
 --                          # purpose: inline comment marker, checks whether the rest of the query is swallowed | applies: any candidate | limit: syntax probe only
-%27                         # purpose: URL-encoded single quote, for params that get decoded before reaching the query layer | applies: params that appear to be double-decoded or pass through an encoding layer | limit: syntax probe only
+%27                         # purpose: literal percent-encoded spelling to distinguish decoding hypotheses | applies: existing context supports a meaningful encoding-boundary test | limit: syntax probe only; logical %27 and wire %27/%2527 differ, do not assume double decoding
+
+# --- Comment/suffix contrasts (synthetic SQL, not additional payload lines) ---
+# SELECT '--tail'; keeps the marker inside a literal; it starts no comment.
+# SELECT 1 --+ 1 returns 1 in SQLite, while a physical newline before + 1
+# resumes parsing and returns 2. SELECT (1 --) instead loses a needed closing
+# parenthesis. Comment acceptance never proves controlled injected evaluation.
+# MySQL requires whitespace/control after --; SQLite does not. See SKILL.md 1b
+# and https://dev.mysql.com/doc/refman/8.4/en/comments.html and
+# https://www.sqlite.org/lang_comment.html . Preserve actual newline/wire bytes.
 
 # --- Engine fingerprinting — extended reference (indicators only, not exploit payloads) ---
 # Use this table to narrow down the engine before selecting Phase 2
@@ -178,6 +188,11 @@
 # distinguishable from ordinary output, absent in the control and not input echo.
 # Expected response: actually observe 49 in that error field/output slot rather
 # than the unevaluated text 7 * 7. Intending the computation is not observing it.
+# Synthetic contrasts (not payload lines or session evidence): response "input:
+# 7 * 7" is raw echo; response "computed:49" supports evaluation only with the
+# compatible expression and owned controls; baseline "computed:49" already present
+# defeats that marker's discrimination. Choose a distinguishable computation or
+# another justified oracle, then apply repeatability; do not infer evaluation.
 # Falsifier: only parser errors/input echo, the marker already in ordinary rows,
 # no computed result, a type mismatch, hidden errors or uninterpretable output.
 # Those observations do not prove controlled evaluation. Unknown projection or

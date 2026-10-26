@@ -81,7 +81,7 @@ the chosen technique is visible; unrelated later sections are not prerequisites.
 
 ## Decision checkpoint — before a probe and after its response
 
-**Observe → Hypothesize → Discriminate → Reassess.**
+**Observe → Hypothesize → Discriminate → Predict → Execute → Interpret → Reassess → Decide.**
 **Observation → Hypothesis → Oracle → Expected Result → Falsifier → Next Decision.**
 Before each HTTP probe, check the control, hypothesis, expected marker and
 falsifier; reassess after its response. Keep reasoning compact; no new ledger
@@ -103,8 +103,9 @@ or full query reconstruction is required.
 
 3. **Test a hypothesis, not a punctuation variant.** Predict the marker and
    falsifier for each shape. Shapes with the same prediction add no new
-   information. A diagnostic can justify materially different payload structure;
-   cosmetic variants are equivalent failed probes. If parsing rejects UNION
+   information. Ambiguous existing observations can justify competing hypotheses
+   and materially different structure; no precise parser error is required.
+   Cosmetic variants are equivalent failed probes. If parsing rejects UNION
    before its projection, that probe did not test the computed-output hypothesis.
    One syntactically incorrect probe does not invalidate a technique.
 4. **For Boolean tests**, choose a known match for an AND-filter. Establish TRUE
@@ -673,14 +674,15 @@ behavior change without an explicit error string (e.g. a size/status delta)
 is enough to establish **SQLI-1** — a syntax-sensitivity signal — but is not
 by itself confirmation; Phase 2 is required before reporting SQLI-2.
 
-Before changing quote, parenthesis, comment or wildcard syntax, write down the query
-shape supported by the latest database error (or `unknown` / a justified
-hypothesis when ambiguous) and choose the next single probe
-that distinguishes the remaining possibilities. Do not walk a punctuation
-list (`--`, `-- `, `/*`, `')`, `'))`, and so on) one request at a time without
-using the returned parser position/message. Base reassessment on executed requests
-and actual responses, not self-labelled probes, `proposal.values` or a mislabelled
-ledger. Account for Input Analysis and earlier attempts in planning without
+Before changing quote, parenthesis, comment or wildcard syntax, state the local
+shape as `unknown` / a justified hypothesis, using all available observations,
+including ambiguous diagnostics. Predict how the next probe distinguishes
+competing possibilities; an exact parser position or a new HTTP observation is
+not required to reconsider existing evidence. Do not walk a punctuation list
+(`--`, `-- `, `/*`, `')`, `'))`, and so on) without information gain.
+Base interpretations on executed requests and actual responses, not predicted
+results, self-labelled probes, `proposal.values` or a mislabelled ledger.
+Account for Input Analysis and earlier attempts in planning without
 adopting their unowned IDs as terminal proof. Continue adapting syntax only when
 observations support a meaningful hypothesis and a discriminating prediction;
 the number of earlier shape changes is not a stopping rule. Equivalent syntax
@@ -719,6 +721,66 @@ captured diagnostics and reconsider the quote/input-position hypothesis before
 another request. A type error is distinct from a syntax error, a successful-write
 acknowledgement, and controlled SQL evaluation. Choose another probe only for a
 discriminating context-compatible hypothesis; do not require every technique.
+
+**Boundary trace — synthetic SQL, not observed target queries or session evidence.**
+Suppose the retained search response has a benign `marker`, a quote causes a
+generic SQL error, and `')` fails. That does not settle grouping depth. These
+competing local shapes illustrate different predictions, not a sequence to try:
+
+```sql
+-- H1: one Boolean group
+SELECT 'marker' WHERE ('moss' LIKE '%{input}%');
+-- H2: two Boolean groups
+SELECT 'marker' WHERE (('moss' LIKE '%{input}%'));
+-- H3: three Boolean groups
+SELECT 'marker' WHERE ((('moss' LIKE '%{input}%')));
+```
+
+For H2, prefix `SELECT 'marker' WHERE (('moss' LIKE '%` → input
+`moss'))--` → suffix `%'));` assembles as:
+
+```sql
+SELECT 'marker' WHERE (('moss' LIKE '%moss'))--%'));
+```
+
+The `'))` boundary is plausible without a diagnostic counting parentheses.
+Bare `'))` still leaves the suffix; choose a syntax-complete test only if its
+predictions discriminate: here the outside-literal comment consumes the suffix,
+so H2 predicts acceptance, H1 an extra `)`, and H3 an unclosed group. A simulated
+accepted response retaining `marker` supports H2 compatibility among these shapes,
+not the full query or SQLI-2; a simulated error leaves other shapes/escaping open.
+Use the actual response to update hypotheses. Do not just add another `)`.
+Phase 2 must test controlled evaluation using any supported boundary, not mistake
+successful suffix removal for that proof.
+
+**Expression position changes the question.** In these invented contexts,
+`{input}` is the insertion point; inspect the composed expression, not the input alone:
+
+| Hypothetical surrounding SQL | Consequence and next decision |
+|---|---|
+| `WHERE label='{input}'` vs `WHERE id={input}` | A quote may close a string but break a numeric expression; compare justified hypotheses, not parameter names. |
+| `WHERE label='{escaped_input}'`, with `'` doubled | `moss'` becomes `label='moss'''`: the quote remains data. An error-free response does not prove breakout. |
+| `SELECT lower('{input}')` | Function parentheses belong to a scalar call; closing it is different from closing Boolean groups. A dangling quote/suffix can still invalidate the statement. |
+| `WHERE {input}` vs `SELECT {input}` | A predicate filters rows; a scalar/projection returns a value. Acceptance in one position does not supply the other's oracle. |
+| `ORDER BY "{input}"` | A quoted identifier is not a value literal; a quote/Boolean payload need not test the sort expression. Do not enumerate columns. |
+| `INSERT INTO scratch(v) VALUES ({input})` | A scalar/Boolean may be valid here, but write acknowledgement is not evaluated-value readback. Apply isolation, write and cleanup guards before any request. |
+
+Double quotes depend on DBMS/configuration: MySQL's default string handling differs
+from `ANSI_QUOTES` identifiers; SQLite has configurable legacy double-quoted-string
+fallback. Do not infer either from a double quote's acceptance. Backslash escaping
+is also dialect/mode dependent; SQLite string quotes are doubled, not backslash escaped.
+References: [SQLite expressions](https://www.sqlite.org/lang_expr.html),
+[SQLite double quotes](https://www.sqlite.org/quirks.html#double_quoted_string_literals_are_accepted),
+[MySQL literals](https://dev.mysql.com/doc/refman/8.4/en/string-literals.html).
+
+**Encoding trace (synthetic).** Logical input → wire representation → evidenced
+decoding → application-input hypothesis → response. A logical `'`, serialized as
+query `q=%27`, becomes `'` after one demonstrated form/query decode. Logical `%27`
+serialized as `q=%2527` becomes `%27` after that same decode, not `'`; a JSON string
+`"%27"` does not itself demonstrate any percent-decoding. A simulated error for
+the former and normal response for the latter would support different handling,
+not double decoding. Without a captured decoder/input boundary, label the
+application input hypothetical. Keep each wire request's identity intact.
 
 **Detecting second-order candidates.** Most Phase 1–2 probes are
 first-order: the payload is sent and its effect observed in the same
@@ -782,6 +844,35 @@ syntax sensitivity alone does not establish SQLI-2. It also applies when 1b
 was absent or ambiguous but the surrounding context suggests an observable
 boolean evaluation. A TRUE/FALSE pair is required for boolean confirmation,
 not for every SQLi technique.
+
+**From boundary to oracle (synthetic continuation of H2).** If observations support
+that boundary, an AND-filter template could use input `moss')) AND {predicate}--`.
+Predict `marker` for `1=1` and no marker for `1=2`, with the same surrounding SQL
+and request template. Execute/reassess TRUE first when compatibility is unresolved;
+only actual, repeatable paired responses can establish SQLI-2.
+
+Contrast a LIKE suffix that changes the intended truth value. Prefix
+`SELECT 'marker' WHERE 'moss' LIKE '%` + input `moss' AND '1'='1` + suffix `%';`
+produces the first statement below; changing only the comparison to a
+context-compatible LIKE gives the other two:
+
+```sql
+SELECT 'marker' WHERE 'moss' LIKE '%moss' AND '1'='1%';
+SELECT 'marker' WHERE 'moss' LIKE '%moss' AND '1' LIKE '1%';
+SELECT 'marker' WHERE 'moss' LIKE '%moss' AND '1' LIKE '2%';
+```
+
+Simulated responses are respectively empty, `marker`, empty: the first intended
+TRUE is actually false after suffix assembly. An HTTP adapter could report 200
+for all three. That status alone establishes neither parsing nor predicate truth.
+
+| Observation from actual comparable requests | Interpretation → next decision |
+|---|---|
+| Nonmatching seed; TRUE/FALSE both empty | AND has no matching row to retain; seek an evidenced benign match or another justified oracle. No SQLi exclusion. |
+| Matching seed; intended TRUE loses `marker` | Context/suffix or the oracle may be wrong; reassess before dependent FALSE, using existing observations. |
+| TRUE/FALSE both errors | The tested expression may never evaluate; distinguish syntax-before-expression, grouping/suffix and type errors. No error-to-payload mapping. |
+| TRUE retains `marker`, FALSE excludes it | Candidate differential; verify the shared request template/auth and required repetitions, not just two status codes. |
+| Different methods, sessions or non-predicate fields | Not a valid pair; do not combine them into confirmation. |
 
 **Pair decision checkpoint:**
 
