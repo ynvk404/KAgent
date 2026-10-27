@@ -594,6 +594,37 @@ Before closing Whole-target Enumeration, apply this checkpoint:
   quota. References alone supply no input fields; commit each evidenced request
   shape incrementally under the structured handoff contract.
 
+### Request-contract discovery before completion
+
+Before leaving an observed endpoint or closing this phase:
+
+- Separate an observed endpoint/path from its verified request contract.
+  `GET 500` proves neither endpoint absence nor lack of POST support. Keep
+  unverified methods, body schemas and input fields `unknown`, never absent or
+  unsupported. Do not invent inputs or Candidates to close the phase.
+- For an endpoint relevant to the testing objective whose method/body/fields
+  remain unknown, consider at least one evidence-grounded next step before
+  leaving it: inspect HTML form method/action and controls, JavaScript call
+  sites/request construction, or API schema/OpenAPI; consider a hypothesis-driven
+  bounded HTTP probe only when justified and permitted. Reuse available evidence
+  before new requests. Apply existing scope, permissions, resource budgets, rate
+  limits, bounded-reading rules and Enumeration phase boundaries. Do not
+  automatically try all HTTP methods, bulk POST or perform unauthorized or
+  high-impact operations; form submission and payload-based testing remain
+  outside this phase.
+- If `record_input` is rejected for endpoint/method metadata conflict, review
+  the proposal, request evidence and provenance. Distinguish observed methods
+  from hypotheses; correct arguments or retry only with valid support under the
+  structured handoff contract. Do not treat validation rejection alone as a
+  stopping reason. Do not bypass or weaken Runtime validation.
+- If further investigation is not possible or appropriate, record a concrete
+  reason and corresponding coverage gap in the inventory: evidence unavailable,
+  permission denied, budget exhausted, endpoint irrelevant to the objective, or
+  no reasonable investigative lead remains. "Not enough evidence to register an
+  input" alone is not a stopping reason. This checkpoint requires a continue/stop
+  assessment, not extra HTTP requests, resolution of every endpoint or indefinite
+  discovery retries.
+
 Inspect the overall workflow state, reusing it if already visible:
 
 ```json

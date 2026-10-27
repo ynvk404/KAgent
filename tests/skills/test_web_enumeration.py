@@ -2,7 +2,8 @@
 
 These tests intentionally validate the skill as a prompt/playbook rather than
 trying to execute curl or invoke the LLM. They are therefore stable even when
-KAgent's runtime/tool implementations change.
+KAgent's runtime/tool implementations change. They do not establish that an
+LLM will follow the instructions in an experiment.
 """
 
 from __future__ import annotations
@@ -510,3 +511,105 @@ def test_default_flow_uses_manual_fields_without_source_management_backlog():
                      'not semantic completeness', 'in direct mode, discover only'):
         assert contract in text
     assert 'process_source' not in text
+
+
+@pytest.fixture
+def request_contract_checkpoint():
+    """Inspect the closing decision rules together, independent of line wraps."""
+    _, body, _ = read_skill()
+    inventory = body.split('## 7. Build the normalized inventory', 1)[1].split(
+        '## 8. Handoff to web-input-analysis', 1)[0]
+    heading = '### Request-contract discovery before completion'
+    assert heading in inventory, 'Request-contract review belongs in Enumeration closure'
+    assert inventory.index(heading) < inventory.index('workflow(action="complete_skill"')
+    checkpoint = inventory.split(heading, 1)[1].split('Inspect the overall workflow state', 1)[0]
+    return collapse_ws(checkpoint.replace('`', '')).lower()
+
+
+def test_get_500_keeps_unverified_request_contract_unknown(request_contract_checkpoint):
+    text = request_contract_checkpoint
+    assert re.search(r'separate.{0,60}observed endpoint/path.{0,70}verified request contract', text)
+    assert re.search(r'get 500.{0,50}neither.{0,50}absence.{0,60}post support', text)
+    assert re.search(
+        r'keep unverified methods, body schemas and input fields.{0,30}unknown'
+        r'.{0,40}never absent or unsupported', text)
+    assert re.search(r'do not invent inputs or candidates.{0,50}close the phase', text)
+
+
+def test_relevant_unknown_contract_requires_considering_a_next_step(request_contract_checkpoint):
+    text = request_contract_checkpoint
+    assert re.search(
+        r'endpoint relevant to the testing objective.{0,80}unknown.{0,60}'
+        r'consider at least one evidence-grounded next step.{0,40}before leaving', text)
+    # Sources must provide request structure, rather than merely route names.
+    for source in (
+        r'inspect html form method/action and controls',
+        r'javascript call sites/request construction',
+        r'api schema/openapi',
+        r'hypothesis-driven bounded http probe only when justified and permitted',
+    ):
+        assert re.search(source, text)
+    assert re.search(r'reuse available evidence before new requests', text)
+
+
+def test_record_input_method_conflict_requires_evidence_review(request_contract_checkpoint):
+    text = request_contract_checkpoint
+    assert re.search(
+        r'if record_input is rejected for endpoint/method metadata conflict.{0,40}'
+        r'review the proposal, request evidence and provenance', text)
+    assert re.search(r'distinguish observed methods from hypotheses', text)
+    assert re.search(r'correct arguments or retry only with valid support', text)
+    assert re.search(
+        r'do not treat validation rejection alone as a stopping reason', text)
+    assert re.search(r'do not bypass or weaken runtime validation', text)
+
+
+def test_contract_stop_requires_specific_reason_and_coverage_gap(request_contract_checkpoint):
+    text = request_contract_checkpoint
+    assert re.search(
+        r'if further investigation is not possible or appropriate.{0,50}'
+        r'record a concrete reason and corresponding coverage gap in the inventory', text)
+    for reason in ('evidence unavailable', 'permission denied', 'budget exhausted'):
+        assert reason in text
+    assert re.search(
+        r'not enough evidence to register an input.{0,30}alone is not a stopping reason', text)
+
+
+def test_contract_discovery_preserves_existing_bounds_and_phase(request_contract_checkpoint):
+    text = request_contract_checkpoint
+    assert re.search(
+        r'apply existing scope, permissions, resource budgets, rate limits, '
+        r'bounded-reading rules and enumeration phase boundaries', text)
+    assert re.search(r'do not automatically try all http methods, bulk post', text)
+    assert re.search(r'(?:do not|or) perform unauthorized or high-impact operations', text)
+    assert re.search(
+        r'form submission and payload-based testing remain outside this phase', text)
+
+
+def test_irrelevant_or_exhausted_endpoints_can_stop_without_extra_requests(request_contract_checkpoint):
+    text = request_contract_checkpoint
+    assert re.search(
+        r'concrete reason.{0,230}endpoint irrelevant to the objective, or '
+        r'no reasonable investigative lead remains', text)
+    assert re.search(
+        r'checkpoint requires a continue/stop assessment, not extra http requests, '
+        r'resolution of every endpoint or indefinite discovery retries', text)
+
+
+async def test_loaded_enumeration_includes_the_closing_contract_checkpoint():
+    from src.skills.load_skill import LoadSkillTool
+    from src.skills.registry import Registry
+
+    _, _, path = read_skill()
+    registry = Registry()
+    registry.load_dir(path.parent.parent)
+    loaded = await LoadSkillTool(registry).run({'name': 'web-enumeration'})
+    # Verify delivery and phase order without a model, target, or simulated
+    # decision engine claiming to interpret the prose.
+    assert (
+        loaded.index('## 7. Build the normalized inventory')
+        < loaded.index('### Request-contract discovery before completion')
+        < loaded.index('workflow(action="complete_skill"')
+        < loaded.index('## 8. Handoff to web-input-analysis')
+    )
+    assert '/rest/user/login' not in loaded
