@@ -90,6 +90,9 @@ or full query reconstruction is required.
 1. **Ground the comparison.** Separate observed facts from assumptions. Identify
    the benign marker and actual diagnostic. Earlier analysis informs planning
    but stays unowned; reuse suitable owned controls rather than recapturing them.
+   First bind the HTTP input using "Input component checkpoint" below; then use
+   the statement/position/oracle table in Phase 2. SQL context and HTTP input
+   identity are separate questions.
 2. **Reconstruct the local boundary:** prefix → inserted expression → suffix.
    Keep competing shapes hypothetical; parser positions do not settle quotes,
    parentheses or the full query.
@@ -137,6 +140,25 @@ is not a general notes log. Reserve existing turns for proof writing, registrati
 and `record_result`; missing proof never prevents an honest unresolved result.
 An unregistered proof file is a local artifact, not accepted evidence. Verify
 the returned `result_id`, `evidence_refs` and outcome before reporting them.
+
+Compare semantic effects and diagnostic categories, not just byte sizes:
+echoed payloads and changing stack traces can change length without showing
+evaluation. For content comparisons, equal retained body hashes supply no
+body differential; a predicted marker must actually occur in its cited
+response before entering `confirmation` or proof. Repeated syntax/type rejection,
+an unchanged acknowledgement or empty/static content with no established oracle
+requires a revised hypothesis and a different observable prediction before
+another probe. Without those, finalize as unresolved; cosmetic encoding/case/
+punctuation changes alone are not a new plan.
+
+Treat local finalization as part of the current attempt from its start: allow
+for effect bookkeeping, minimal proof writing, registration, result submission
+and required finding persistence within the existing budget. Before spending
+another call, ask whether it resolves a specific missing proof requirement.
+Once the applicable proof is sufficient, perform those local steps immediately;
+optional report expansion and further techniques must not delay them. If the
+oracle remains unavailable, record that limitation now rather than accumulating
+equivalent failures until forced closure. This adds no quota or budget extension.
 
 ## Runtime completion contract
 
@@ -564,6 +586,39 @@ For each candidate you're working, restate before touching it:
 - the context and signal that got it here (from `candidates.md`);
 - current confidence (low/medium/high).
 
+### Input component checkpoint
+
+Resolve the mutation from the operator request, canonical input, Candidate
+request template and source reference before constructing a probe. Preserve
+endpoint, method, media/auth context, baseline and non-candidate fields. Keep
+analysis observations as planning context; do not adopt them as owned evidence.
+
+| Designated HTTP input | What changes; what stays fixed |
+|---|---|
+| Parameter value (`input_component: value` when supplied) | Change the selected query/form value; keep its key and other occurrences fixed. |
+| Parameter name (`input_component: name` when supplied) | Replace the selected query/form key; preserve its baseline value and all unrelated fields. Changing its value tests a different input. Encode the new key as a key, not as part of the value. |
+| Body field | Identify its media type and exact field/JSON pointer or supported selector; a JSON property name and its value are different components. Preserve surrounding fields and types. |
+| Path | Change only the selected segment; retain origin and remaining path/query. Declare actual changed paths with their roles before starting validation, as required by the existing association contract. |
+| Header or cookie | Identify the exact header/cookie and whether its name or value is designated; preserve other headers/cookies and session context. Use only supported request modes. |
+
+`input_component` here describes supplied context, not a new Workflow field or
+tool argument. Record the distinction in existing `notes`, `signals` or request
+template when needed. Ordinary value candidates remain valid without that label;
+do not require it from Whole-target handoffs. If name/value intent is ambiguous,
+resolve it from the existing source or operator before mutation; do not guess
+from a parameter's spelling. Verify the effective request preview, not just the
+intended payload. A pre-dispatch selector/component rejection is not a target
+SQL response: correct the input binding before retrying, rather than changing
+SQL syntax or encoding repeatedly.
+
+Captured Replay's `mutation_value` and selectors replace supported values, not
+parameter names; header/cookie mutation is also unsupported there. For a bound
+capture with an unsupported component, retain the blocker and use the existing
+recapture/rebinding or unresolved path. Do not drop `candidate_id` or reconstruct
+the capture as Direct HTTP. With no bound capture, an evidenced Direct request
+may express a supported component under the ordinary scope/permission gates;
+this checkpoint grants no new adapter, origin or action authority.
+
 Work one candidate at a time. Don't run confirmation probes against every
 `sql-injection`-tagged candidate in a batch before recording results for the
 first — finish, record, then move to the next.
@@ -814,7 +869,7 @@ the previous test failed.
 
 Select a technique using the SQL context supported by target evidence:
 
-- **Statement shape:** SELECT, INSERT, UPDATE, DELETE, or `unknown`.
+- **Statement shape:** SELECT, INSERT, UPDATE, DELETE, CALL, or `unknown`.
 - **Input position:** quoted string, numeric expression, predicate, identifier,
   or another supported expression; record `unknown` or a justified hypothesis
   when the evidence does not resolve it.
@@ -832,6 +887,27 @@ not cycling through equivalent AND/OR payloads. Boolean evaluation can occur
 in INSERT/VALUES contexts; its applicability depends on the expression and
 observable effect, not a blanket statement-type rule. Preserve the existing
 attempt limits and state-changing endpoint isolation/cleanup guard.
+
+Use this compatibility table as a decision aid, not a required probe sequence.
+Apply it only to observed query fragments or explicitly labelled hypotheses;
+an application's printed query may be static text, not the executed statement.
+
+| Supported context | Technique and observable criterion | Reassess or retain a limitation when |
+|---|---|---|
+| SELECT row predicate | A compatible Boolean filter can retain/exclude a known benign match; require the full repeated pair contract. | TRUE loses the marker, or both sides are empty/errors without established compatibility. |
+| SELECT scalar/projection | Controlled error needs a compatible observable expression; bounded UNION additionally needs a known projection. Require a visible computed result distinct from echo/control. | A value is accepted but its evaluated result is hidden; parser errors do not prove computation. |
+| INSERT / VALUES, UPDATE / SET | These positions consume typed scalar values; use controlled evaluation only if an already authorized, isolated flow supplies an interpretable result. UPDATE / WHERE is a separate predicate position. | Write acknowledgement alone cannot distinguish evaluated values; stop further stateful probes without valid isolation and cleanup. Needing an oracle grants no readback or write authority. |
+| CALL argument or call suffix | Distinguish an argument expression from text after a completed call; establish argument types, driver syntax and visible return/error behavior before selecting a technique. | AND/OR or UNION after a completed call need not be legal; a routine name or engine fingerprint supplies neither a SELECT projection nor permission to invoke other routines/stack statements. |
+| Identifier, sort key, or unknown expression | Resolve the local boundary, expected type and observable effect before an applicable bounded test; keep alternatives hypothetical. | A generic value/predicate payload is incompatible, or no observable criterion can discriminate the hypothesis. |
+
+A type error diagnoses compatibility, not attacker-controlled evaluation. If
+the same type/syntax category recurs, use existing diagnostics to revise the
+position/type hypothesis; send another probe only when it tests a materially
+different prediction. A different parser token alone is not a controlled
+error-based oracle. Switch to another supported technique only with its own
+context, control, observable criterion and falsifier; do not run a Boolean pair,
+UNION or timing probe merely to fill a checklist. Unknown context/oracle stays
+`insufficient-evidence`, not `confirmed` or a completed `not-confirmed`.
 
 Apply the evidence-to-decision checkpoint in "Recording the result" before
 submitting confirmation, whatever technique supplies the proof.

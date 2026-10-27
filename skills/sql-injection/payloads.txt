@@ -145,6 +145,14 @@
 # oracle per SKILL.md Phase 2; no mandatory order or technique cycling. These
 # examples are not a sequence to execute. Each switch needs a distinct
 # evidence-supported plan within scope, permissions and runtime/operator limits.
+# Bind the designated HTTP component first (SKILL.md Input component checkpoint):
+# a name mutation replaces a key while retaining its value; value examples below
+# are not instructions to change that value for a name candidate. Replay value
+# selectors do not rename keys; unsupported bound mutations remain blockers.
+# Then select by statement, expression position, expected type and observable
+# result. INSERT/VALUES and UPDATE/SET are not automatically row-filter contexts;
+# CALL arguments and text after a completed call are different positions. A
+# printed query or changing parser/type error is not controlled evaluation.
 # Reassess observations against predictions; continue only for a useful
 # discriminating test, not to exhaust examples. Stop when evidence suffices,
 # no useful authorized test remains or execution is blocked; unresolved context
