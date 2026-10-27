@@ -5,7 +5,7 @@ from decimal import Decimal
 from html import escape
 import math
 
-from benchmarks.common.contracts import CLASSES, PARTITIONS
+from benchmarks.common.contracts import CLASSES, ASSESSMENT_STATUSES
 from .aggregate import rate_parts
 from .model import ReportModel
 from .thesis_charts import render_thesis_charts
@@ -17,13 +17,12 @@ COLORS = {
     'invalid': '#6b5b83', 'neutral': '#666666', 'empty': '#f1f3f5',
     'blue': '#285c79',
 }
-PARTITION_LABELS = ('Đánh giá được', 'Chưa có kết luận', 'Lỗi thực thi', 'Kết quả không hợp lệ', 'Chưa chạy')
-PARTITION_COLORS = tuple(COLORS[key] for key in ('positive', 'warning', 'failure', 'invalid', 'neutral'))
+PARTITION_LABELS = ('Đã chấp nhận', 'Chưa có kết luận', 'Không hợp lệ', 'Không có kết quả')
+PARTITION_COLORS = tuple(COLORS[key] for key in ('positive', 'warning', 'invalid', 'neutral'))
 CLASS_STYLES = (('SQLi', CLASSES[0], COLORS['blue']), ('XSS', CLASSES[1], COLORS['invalid']))
 METRIC_STYLES = (('recall', 'Recall', COLORS['blue']),
                  ('precision', 'Precision', COLORS['positive']),
-                 ('fpr', 'FPR', COLORS['failure']),
-                 ('evaluability', 'Tỷ lệ đánh giá được', COLORS['positive']))
+                 ('fpr', 'FPR', COLORS['failure']))
 WIDTH = 920
 CASES_PER_PAGE = 20
 STYLE = (
@@ -73,8 +72,9 @@ def _header(model: ReportModel, title: str, subtitle: str) -> list[str]:
 
 def confusion_matrix(model: ReportModel) -> bytes:
     group = model.metrics['overall']
+    eligible = group['assessment_accepted']
     body = _header(model, 'Confusion matrix',
-                   f"Evaluable cases: {group['evaluable']:,} of {group['scheduled']:,} scheduled")
+                   f"Accepted assessments: {eligible:,} of {group['scheduled']:,} scheduled")
     body += [_text(572, 151, 'Agent assessment', 'center section'),
              _text(462, 181, 'Positive', 'center'), _text(682, 181, 'Negative', 'center'),
              _text(32, 226, 'Ground truth', 'section'),
@@ -87,13 +87,13 @@ def confusion_matrix(model: ReportModel) -> bytes:
                      _rect(x, y, 5, 88, color),
                      _text(x + 102, y + 29, label, 'center'),
                      _text(x + 102, y + 65, f"{group[label]:,}", 'title center number')]
-    body.append(_text(32, 434, 'Only evaluable cases contribute; unresolved and failed cases are excluded.', 'small'))
+    body.append(_text(32, 434, 'Accepted terminal assessments, including failed executions; other assessments are excluded.', 'small'))
     return _svg(466, body)
 
 
 def class_metrics(model: ReportModel) -> bytes:
     body = _header(model, 'Validation metrics by vulnerability class',
-                   'Recall, Precision, FPR dùng các case đánh giá được; Tỷ lệ đánh giá được dùng toàn bộ case đã lên lịch.')
+                   'Recall, Precision and FPR use accepted terminal assessments, including failed executions.')
     for class_index, (label, cls, _) in enumerate(CLASS_STYLES):
         group = model.metrics['classes'][cls]
         top = 150 + class_index * 208
@@ -104,11 +104,7 @@ def class_metrics(model: ReportModel) -> bytes:
             y = top + 18 + index * 38
             numerator, denominator = rate_parts(group, rate)
             value = group[rate]
-            if rate == 'evaluability':
-                body.append(f'<text x="48" y="{y + 17}"><tspan x="48" dy="-8">Tỷ lệ đánh giá</tspan>'
-                            '<tspan x="48" dy="17">được</tspan></text>')
-            else:
-                body.append(_text(48, y + 17, display_label))
+            body.append(_text(48, y + 17, display_label))
             body.append(_rect(190, y, 470, 24, COLORS['empty']))
             if value is not None and value > 0:
                 body.append(_rect(190, y, round(470 * value, 4), 24, color))
@@ -120,7 +116,7 @@ def class_metrics(model: ReportModel) -> bytes:
 
 
 def evaluation_partitions(model: ReportModel) -> bytes:
-    body = _header(model, 'Evaluation outcome distribution by vulnerability class',
+    body = _header(model, 'Assessment status distribution by vulnerability class',
                    'All scheduled cases; patterns and labeled counts remain readable in grayscale.')
     # No text sits on a segment, including very small nonzero segments.
     marks = ('<path d="M0 8L8 0"/>', '<path d="M0 0L8 8"/>',
@@ -134,13 +130,13 @@ def evaluation_partitions(model: ReportModel) -> bytes:
     body.append('</defs>')
     for index, (label, cls, _) in enumerate(CLASS_STYLES):
         group = model.metrics['classes'][cls]
-        if sum(group[part] for part in PARTITIONS) != group['scheduled']:
+        if sum(group['assessment_status_counts'][part] for part in ASSESSMENT_STATUSES) != group['scheduled']:
             raise ValueError('class partition total differs from scheduled')
         y = 144 + index * 64
         body += [_text(32, y + 21, label, 'section'), _rect(105, y, 500, 30, COLORS['empty'])]
         x = 105.0
-        for part_index, part in enumerate(PARTITIONS):
-            count = group[part]
+        for part_index, part in enumerate(ASSESSMENT_STATUSES):
+            count = group['assessment_status_counts'][part]
             width = 500 * count / group['scheduled'] if group['scheduled'] else 0
             if count:
                 rect = _rect(round(x, 4), y, round(width, 4), 30, f'url(#partition-{part_index})')
@@ -149,7 +145,7 @@ def evaluation_partitions(model: ReportModel) -> bytes:
         body.append(_text(640, y + 21, f"N scheduled = {group['scheduled']:,}", 'number'))
     # Table headers double as the legend, so labels need not be repeated.
     for index, label in enumerate(PARTITION_LABELS):
-        x = 162 + index * 155
+        x = 162 + index * 190
         body += [_rect(x - 9, 265, 18, 15, f'url(#partition-{index})'),
                  _text(x, 302, label, 'small center')]
     body.append(_line(32, 312, WIDTH - 32, 312, 'grid'))
@@ -157,11 +153,11 @@ def evaluation_partitions(model: ReportModel) -> bytes:
         group = model.metrics['classes'][cls]
         y = 338 + index * 36
         body.append(_text(32, y, label, 'section'))
-        for part_index, part in enumerate(PARTITIONS):
-            text = _text(162 + part_index * 155, y, f'{group[part]:,}', 'center number')
+        for part_index, part in enumerate(ASSESSMENT_STATUSES):
+            text = _text(162 + part_index * 190, y, f'{group["assessment_status_counts"][part]:,}', 'center number')
             body.append(text.replace('<text ', f'<text data-class="{cls}" data-partition="{part}" '))
     body += [_text(32, 406, 'Counts include zeros and sum to N scheduled in each class.', 'small'),
-             _text(32, 428, 'Chưa có kết luận, lỗi thực thi, kết quả không hợp lệ và chưa chạy không được tính vào TN/FN.', 'small')]
+             _text(32, 428, 'Unresolved, invalid and unavailable assessments do not contribute to TP/TN/FP/FN.', 'small')]
     return _svg(450, body)
 
 

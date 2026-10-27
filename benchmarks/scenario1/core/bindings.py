@@ -1,4 +1,4 @@
-"""Pure v1 evaluation bindings; no execution runtime or publication dependencies."""
+"""Pure current evaluation bindings; no execution runtime or publication dependencies."""
 from __future__ import annotations
 
 from dataclasses import asdict
@@ -7,12 +7,12 @@ from pathlib import Path
 
 from benchmarks.common.contracts import CaseExecution, RunManifest, decode, digest, file_hash, read_json
 
-EVALUATOR = 'offline-agent-assessment-v1'
+EVALUATOR = 'offline-agent-assessment-v2'
+SCHEDULER_SKIP = 'scheduler-skip'
 
 
 def evaluation_identity(manifest: RunManifest, rows: list[dict], partial: bool,
                         orphan_exports: list[dict]) -> str:
-    # Preserve the original v1 encoding, including omission of an empty orphan list.
     identity_input = [EVALUATOR, asdict(manifest), [e for e in rows if e['kind'] != 'evaluated'], partial]
     if orphan_exports:
         identity_input.append(orphan_exports)
@@ -40,9 +40,7 @@ def validate_recorded_evaluations(records: list[dict], histories: dict, identity
         previous = next((e for e in histories[record['case_id']] if e['kind'] == 'evaluated'), None)
         if previous:
             data = previous['data']
-            if data.get('evaluation_identity') not in {identity, 'fail-fast-v1'}:
+            if data.get('evaluation_identity') not in {identity, SCHEDULER_SKIP}:
                 raise ValueError('conflicting evaluation identity/version')
-            if data.get('partition') != record['partition'] or data.get('reason') != record['reason']:
-                raise ValueError('conflicting recorded evaluation')
-            if data.get('evaluation_identity') != 'fail-fast-v1' and any(data.get(k) != v for k, v in record.items()):
+            if any(data.get(k) != v for k, v in record.items()):
                 raise ValueError('conflicting evaluation record fields')

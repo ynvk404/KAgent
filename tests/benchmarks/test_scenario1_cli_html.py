@@ -172,7 +172,7 @@ def test_toml_paths_preserve_symlink_rejection_and_reset_override(lab, capsys):
     assert args.container is None and args.reset_war is None and args.ingress_container is None
 
 
-@pytest.mark.parametrize('status,partition', [('completed', 'unresolved'), ('provider-error', 'execution-failed')])
+@pytest.mark.parametrize('status,partition', [('completed', 'unavailable'), ('provider-error', 'unavailable')])
 def test_progress_is_real_lifecycle_and_keeps_json(tmp_path, monkeypatch, capsys, op, settings, status, partition):
     monkeypatch.setattr(runner, 'reproducibility', lambda: {'offline': True})
     stream = StringIO()  # Non-TTY receives ordinary flushed lines, no terminal escapes.
@@ -193,8 +193,8 @@ def test_progress_is_real_lifecycle_and_keeps_json(tmp_path, monkeypatch, capsys
     assert partition in text and 'Total elapsed:' in text and '\x1b' not in text
     assert read_json(root / 'manifest.json')['reproducibility']['invocation']['configuration_sha256'] == 'a' * 64
     assert [row['kind'] for row in read_records(root / 'events.jsonl')[0]] == ['scheduled', 'started', 'runtime-finished', 'evaluated']
-    progress({'kind': 'evaluated', 'case_id': op.case_id, 'data': {'partition': 'invalid-result', 'reason': 'invalid-result'}})
-    assert 'Evaluator      invalid-result' in stream.getvalue()
+    progress({'kind': 'evaluated', 'case_id': op.case_id, 'data': {'assessment_status': 'invalid', 'assessment_reason': 'invalid'}})
+    assert 'Evaluator      invalid' in stream.getvalue()
 
 
 def test_reset_failure_and_observer_failure_do_not_change_execution(tmp_path, monkeypatch, op, settings):
@@ -211,7 +211,7 @@ def test_reset_failure_and_observer_failure_do_not_change_execution(tmp_path, mo
     def broken_observer(_):
         raise BrokenPipeError('closed progress')
     root = runner.run(manifest, settings, tmp_path / 'second', launcher=lambda *_: (-9, False), observer=broken_observer)
-    assert evaluate(root)['records'][0]['partition'] == 'execution-failed'
+    assert evaluate(root)['records'][0]['assessment_status'] == 'unavailable'
 
 
 @pytest.mark.parametrize('progress', ['auto', 'none'])
@@ -233,7 +233,7 @@ def test_cli_stdout_json_and_progress_stderr(tmp_path, monkeypatch, capsys, op, 
                  *(['--export-csv'] if export_csv else [])]) == 4
     out = capsys.readouterr()
     payload = json.loads(out.out)
-    assert payload['execution-failed'] == 12
+    assert payload['execution_failed'] == 12
     public = Path(payload['artifacts'])
     assert COMPANIONS <= {p.name for p in (public / 'report').iterdir()}
     assert len(list((public / 'report/charts').glob('*.svg'))) == 8
@@ -243,7 +243,7 @@ def test_cli_stdout_json_and_progress_stderr(tmp_path, monkeypatch, capsys, op, 
     assert ('KAgent — Scenario 1 Benchmark' in out.err) == (progress == 'auto')
 
 
-COMPANIONS = {'summary.csv', 'per-case.csv', 'partitions.csv',
+COMPANIONS = {'summary.csv', 'per-case.csv', 'execution.csv', 'assessments.csv',
               'abnormal-analysis-template.csv', 'thesis-tables.md', 'report.json'}
 
 
@@ -289,7 +289,7 @@ def test_embedded_hostile_evidence_is_bounded_redacted_and_json_only(op):
               'evidence_manifest': [{'source': source, 'hash': digest(source)}]}]},
               'result_id': 'result', 'accepted_at_freeze': True}
     files = {}
-    _, evidence = _evidence(export, op.case_id, files, 2)
+    _, evidence = _evidence(export, op.case_id)
     assert files == {}  # Evidence is embedded in JSON, never duplicated into TXT.
     proof = json.loads(json_bytes({'selected_evidence': evidence}))['selected_evidence'][0]
     assert secret not in proof['content'] and '/home/operator/private' not in proof['content']
@@ -322,7 +322,7 @@ def test_all_official_cases_pagination_tables_and_details(lab, tmp_path, setting
     manifest = replace(select(dataset, 'official-view', 'reduced'), runtime=asdict(settings))
     first, second, third = manifest.execution_order[:3]
     legacy, _ = _fixture(tmp_path, manifest, classification='official',
-        partitions={first: 'not-run', second: 'unresolved', third: 'invalid-result'})
+        partitions={first: 'not-run', second: 'unresolved', third: 'invalid'})
     public = tmp_path / 'official-report'
     root = allocate_run(public)
     for path in legacy.rglob('*'):
@@ -343,45 +343,26 @@ def test_all_official_cases_pagination_tables_and_details(lab, tmp_path, setting
     assert len(rows) == 40
     # CSV keeps the restricted pseudonymous presentation; case JSON joins the real IDs.
     assert [r['case_id'] for r in rows] == [c['case_id'] for c in load_report(root).cases]
-    assert [c['evaluator_partition'] for c in cases[:3]] == ['not-run', 'unresolved', 'invalid-result']
+    assert [c['assessment_status'] for c in cases[:3]] == ['unavailable', 'unresolved', 'invalid']
     assert resolve_run(public) == root
 
 
 @pytest.mark.parametrize('version', [1, 2, 3])
-def test_historical_public_resolution(tmp_path, op, settings, version):
+def test_historical_public_contract_is_rejected(tmp_path, op, settings, version):
     root, public, *_ = frozen(tmp_path, op, settings)
     writer.write_report(root)
-    assert {'summary.csv', 'per-case.csv', 'partitions.csv', 'abnormal-analysis-template.csv',
+    assert {'summary.csv', 'per-case.csv', 'execution.csv', 'assessments.csv',
             'thesis-tables.md', 'report.json'} <= {p.name for p in (public / 'report').iterdir()}
     assert resolve_run(public) == root
-    legacy_public = tmp_path / 'legacy-public'
-    model = load_report(root)
-    files = {f'report/{name}': raw for name, raw in writer._render(model).items()}
-    files.update(result_files(root, model, version=1 if version == 1 else 2))
-    if version == 2:
-        files['index.html'] = b'<!doctype html><html><body>Historical dashboard</body></html>'
-    index = json.loads(index_file(root, legacy_public, model, files))
+    index_path = public / 'results/index.json'
+    index = read_json(index_path)
     index['schema'] = f'scenario1-public-results-v{version}'
     index['binding'] = digest({k: v for k, v in index.items() if k != 'binding'})
-    files['results/index.json'] = json_bytes(index)
-    for ref, raw in files.items():
-        target = legacy_public / ref
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(raw)
-    assert resolve_run(legacy_public) == root
-    assert read_json(legacy_public / 'results' / f'{op.case_id}.json')['schema'] == f'scenario1-public-case-v{1 if version == 1 else 2}'
-    before = {p.relative_to(legacy_public): p.read_bytes() for p in legacy_public.rglob('*') if p.is_file()}
-    assert load_report(legacy_public).metrics == model.metrics
-    fresh = tmp_path / 'fresh-export'
-    writer.write_report(legacy_public, fresh)
-    assert not (fresh / 'index.html').exists()
-    assert resolve_run(fresh) == root
-    assert {p.relative_to(legacy_public): p.read_bytes() for p in legacy_public.rglob('*') if p.is_file()} == before
-    if version == 2:
-        # The historical dashboard remains a required, hash-checked artifact.
-        (legacy_public / 'index.html').write_bytes(b'changed dashboard')
-        with pytest.raises(ValueError, match='public artifact integrity mismatch'):
-            resolve_run(legacy_public)
+    index_path.write_bytes(json_bytes(index))
+    before = {p: p.read_bytes() for p in public.rglob('*') if p.is_file()}
+    with pytest.raises(ValueError, match='invalid public results descriptor'):
+        resolve_run(public)
+    assert all(p.read_bytes() == raw for p, raw in before.items())
 
 
 def test_rebound_embedded_evidence_cannot_bypass_canonical_projection(tmp_path, op, settings):

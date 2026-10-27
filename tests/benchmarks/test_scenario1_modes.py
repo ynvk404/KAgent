@@ -162,7 +162,7 @@ def test_cli_run_persists_mode_classification_and_unchanged_bindings(
     assert all(row['data']['manifest_hash'] == record['manifest_identity']
                for row in rows if row['kind'] == 'scheduled')
     assert load_report(root).metadata['classification'] == kind
-    assert json.loads(capsys.readouterr().out)['execution-failed'] == count
+    assert json.loads(capsys.readouterr().out)['execution_failed'] == count
 
 
 @pytest.mark.parametrize('mode', ['smoke', 'official'])
@@ -207,7 +207,7 @@ def test_historical_modes_and_run_kind_artifacts_verify_evaluate_and_report_unch
     dataset.verify(restored)
     evaluation = evaluate(root, publish=False)
     assert evaluation['metrics']['overall']['scheduled'] == count
-    assert evaluation['metrics']['overall']['not-run'] == count
+    assert evaluation['metrics']['overall']['not_run'] == count
     write_new(root / f'evaluation-{evaluation["evaluation_identity"]}.json', evaluation)
     model = load_report(root)
     assert model.metadata['classification'] == (kind or 'unknown')

@@ -1,12 +1,13 @@
-"""Presentation of canonical evaluator counts and rates, without rescoring."""
+"""Presentation of the single current evaluation contract."""
 from __future__ import annotations
 
-from benchmarks.common.contracts import CLASSES, PARTITIONS
+from benchmarks.common.contracts import CLASSES
 from .model import ReportModel
 
 LABELS = (('Overall', 'overall'), ('SQLi', CLASSES[0]), ('XSS', CLASSES[1]))
-RATES = ('recall', 'precision', 'fpr', 'evaluability')
-COUNTS = ('scheduled', 'evaluable', 'TP', 'TN', 'FP', 'FN')
+RATES = ('recall', 'precision', 'fpr', 'assessment_coverage', 'completion_rate')
+COUNTS = ('scheduled', 'started', 'completed', 'execution_failed', 'not_run',
+          'assessment_accepted', 'TP', 'TN', 'FP', 'FN')
 
 
 def groups(model: ReportModel):
@@ -19,7 +20,8 @@ def rate_parts(group: dict, name: str) -> tuple[int, int]:
         'recall': (group['TP'], group['TP'] + group['FN']),
         'precision': (group['TP'], group['TP'] + group['FP']),
         'fpr': (group['FP'], group['FP'] + group['TN']),
-        'evaluability': (group['evaluable'], group['scheduled']),
+        'assessment_coverage': (group['assessment_accepted'], group['scheduled']),
+        'completion_rate': (group['completed'], group['scheduled']),
     }[name]
 
 
@@ -35,12 +37,7 @@ def summary_rows(model: ReportModel) -> list[dict]:
     return result
 
 
-def partition_rows(model: ReportModel) -> list[dict]:
-    return [{'class': label, 'scheduled': group['scheduled'],
-             **{part.replace('-', '_'): group[part] for part in PARTITIONS}}
-            for label, group in groups(model)]
-
-
 def public_metrics(model: ReportModel) -> dict:
-    return {label: {key: group[key] for key in (*COUNTS, *PARTITIONS, *RATES)}
+    return {label: {key: group[key] for key in (*COUNTS, *RATES,
+                   'execution_status_counts', 'assessment_status_counts')}
             for label, group in groups(model)}

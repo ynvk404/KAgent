@@ -97,7 +97,7 @@ def main(argv=None) -> int:
             print(json.dumps({'run_id': report['run_id'], 'incomplete': report['incomplete'],
                               **report['metrics']['overall']}, indent=2))
             counts = report['metrics']['overall']
-            return 2 if counts['invalid-result'] else 3 if report['incomplete'] else 4 if counts['execution-failed'] else 0
+            return 2 if counts['assessment_status_counts']['invalid'] else 3 if report['incomplete'] else 4 if counts['execution_failed'] else 0
         invocation_metadata = None
         if args.command == 'run':
             from .config import resolve_config
@@ -158,7 +158,7 @@ def main(argv=None) -> int:
         if progress:
             progress.evaluated(report)
         print(json.dumps({'artifacts': str(destination), 'internal': str(internal), **report['metrics']['overall']}, indent=2))
-        return 5 if (internal / 'blocked.json').exists() else 2 if report['metrics']['overall']['invalid-result'] else 3 if report['incomplete'] else 4 if report['metrics']['overall']['execution-failed'] else 0
+        return 5 if (internal / 'blocked.json').exists() else 2 if report['metrics']['overall']['assessment_status_counts']['invalid'] else 3 if report['incomplete'] else 4 if report['metrics']['overall']['execution_failed'] else 0
     except (ValueError, OSError, KeyError) as err:
         # Configuration/mapping errors contain no credentials; runtime errors only exported as types.
         print(f'benchmark error: {err}', file=sys.stderr)

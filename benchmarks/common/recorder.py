@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 import uuid
 
-from .contracts import PROTOCOL, SCENARIO, SCHEMA, STATUSES, PARTITIONS, identifier, parse_json
+from .contracts import PROTOCOL, SCENARIO, SCHEMA, STATUSES, EvaluationRecord, decode, identifier, parse_json
 
 KINDS = ("scheduled", "started", "runtime-finished", "evaluated")
 KEYS = {"schema_version", "scenario", "protocol_version", "run_id", "case_id", "execution_id",
@@ -78,8 +78,13 @@ def validate_lifecycle(rows: list[dict]) -> dict[str, list[dict]]:
                 raise ValueError("duplicate/invalid evaluation transition")
             if row['execution_id'] != case[-1]['execution_id']:
                 raise ValueError("evaluation execution mismatch")
-            if row['data'].get('partition') not in PARTITIONS or not row['data'].get('reason') or not row['data'].get('evaluation_identity'):
+            if not row['data'].get('evaluation_identity'):
                 raise ValueError('invalid evaluation record')
+            record = decode(EvaluationRecord, {k: v for k, v in row['data'].items() if k != 'evaluation_identity'})
+            expected_status = ('not-run' if previous == 'scheduled' else case[-1]['status'])
+            if (record.case_id != row['case_id'] or record.execution_status != row['status']
+                    or record.execution_status != expected_status):
+                raise ValueError('evaluation status/case mismatch')
         case.append(row)
     return grouped
 

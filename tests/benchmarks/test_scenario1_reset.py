@@ -93,13 +93,13 @@ def test_unknown_reset_blocks_every_next_worker(tmp_path, settings, failure, lau
     events = [json.loads(row) for row in (root / 'events.jsonl').read_text().splitlines()]
     untouched = [row for row in events if row['kind'] == 'evaluated']
     assert len(untouched) == 12 - launched
-    assert all(r['status'] == 'not-run' and r['data']['partition'] == 'not-run' for r in untouched)
+    assert all(r['status'] == 'not-run' and r['data']['assessment_status'] == 'unavailable' for r in untouched)
     assert any(json.loads(p.read_text())['status'] == 'blocked' for p in (root / 'reset-evidence').glob('*.json'))
     from benchmarks.scenario1.core.evaluate import evaluate
     from benchmarks.scenario1.reporting.loader import load_report
     evaluation = evaluate(root)
-    assert evaluation['metrics']['overall']['not-run'] == 12 - launched
-    assert all(record['confusion'] is None for record in evaluation['records'])
+    assert evaluation['metrics']['overall']['not_run'] == 12 - launched
+    assert all(record['assessment_confusion'] is None for record in evaluation['records'])
     # Existing fail-fast sentinel preserves evaluator/reporting contracts; the
     # separate block_reason and blocked.json identify mandatory reset blocking.
     assert len(load_report(root).cases) == len(manifest.execution_order)
@@ -119,7 +119,7 @@ def test_verified_reset_admits_all_synthetic_cases_sequentially(tmp_path, settin
     assert control.resets == 2 * len(workers)
     assert not (root / 'blocked.json').exists()
     from benchmarks.scenario1.core.evaluate import evaluate
-    assert evaluate(root)['metrics']['overall']['execution-failed'] == len(workers)
+    assert evaluate(root)['metrics']['overall']['execution_failed'] == len(workers)
 
 
 def test_interruption_resume_requires_new_verified_reset(tmp_path, op, settings):

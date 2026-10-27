@@ -115,24 +115,17 @@ async def test_finding_export_redacts_links_and_preserves_sources(finding_run, o
     assert all((root / ref).read_bytes() == value for ref, value in before.items())
 
 
-async def test_original_v4_finding_exports_remain_resolvable(finding_run, op):
-    from benchmarks.scenario1.reporting.loader import load_report
-    from benchmarks.scenario1.reporting.projection import result_files
+async def test_old_public_contract_is_rejected_without_rewriting(finding_run, op):
     build, _ = finding_run
     root, public = build()
     write_report(root)
-    historical = result_files(root, load_report(root), compact_findings=False)
-    for ref, raw in historical.items():
-        (public / ref).write_bytes(raw)
-    content = (public / f'findings/{op.case_id}.md').read_text()
-    assert 'Candidate ID' in content and 'Confirmation binding' in content
     index = read_json(public / 'results/index.json')
     index['schema'] = 'scenario1-public-results-v4'
-    index['files'] = {ref: file_hash(public / ref) for ref in index['files']}
     index['binding'] = digest({k: v for k, v in index.items() if k != 'binding'})
     (public / 'results/index.json').write_bytes(json_bytes(index))
     before = {p.relative_to(public): p.read_bytes() for p in public.rglob('*') if p.is_file()}
-    assert resolve_run(public) == root
+    with pytest.raises(ValueError, match='invalid public results descriptor'):
+        resolve_run(public)
     assert all((public / ref).read_bytes() == raw for ref, raw in before.items())
 
 
@@ -148,7 +141,7 @@ async def test_missing_or_stale_finding_is_pending(finding_run, op, kind, reason
     root, public = build(kind, report)
     write_report(root)
     case = read_json(public / 'results' / f'{op.case_id}.json')
-    assert case['agent_outcome'] == 'confirmed'
+    assert case['assessment_outcome'] == 'confirmed'
     assert case['finding'] == {'status': 'pending', 'report_ref': None, 'reason': reason}
     assert case['persisted_finding'] is False
     assert not (public / 'findings').exists()

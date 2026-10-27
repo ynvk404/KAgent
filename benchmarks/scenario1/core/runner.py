@@ -14,10 +14,11 @@ import time
 import uuid
 from importlib.metadata import distributions
 
-from benchmarks.common.contracts import (CaseExecution, OperationalCaseInput, RunManifest,
+from benchmarks.common.contracts import (CaseExecution, EvaluationRecord, OperationalCaseInput, RunManifest,
                                         RuntimeSettings, decode, digest, file_hash, write_new, read_json)
 from benchmarks.common.recorder import Recorder
 from .classification import RunKind, write_run_classification
+from .bindings import SCHEDULER_SKIP
 from .runtime import CAPABILITY, REPO
 from .storage import allocate_run, bind_storage, resolve_run
 from ..reset.client import ResetBlocked, persist
@@ -251,8 +252,9 @@ def _run(manifest: RunManifest, settings: RuntimeSettings, destination: Path, *,
             # Untouched cases remain scheduled. Evaluator marks them not-run/fail-fast.
             remaining = manifest.execution_order[manifest.execution_order.index(case_id) + 1:]
             for skipped in remaining:
-                recorder.append('evaluated', skipped, 'not-run', data={'partition': 'not-run', 'reason': 'fail-fast',
-                                                                      'evaluation_identity': 'fail-fast-v1'})
+                recorder.append('evaluated', skipped, 'not-run', data={
+                    **asdict(EvaluationRecord(skipped, 'not-run', 'unavailable', 'fail-fast', None, None)),
+                    'evaluation_identity': SCHEDULER_SKIP})
                 observe(recorder.rows[-1])
             break
     if reset_controller is not None and not (destination / 'blocked.json').exists():
@@ -278,5 +280,6 @@ def block_run(destination, recorder, manifest, next_case, phase, error, *, detai
             # existing interrupted-execution treatment. Only untouched cases are not-run.
             records = [row for row in recorder.rows if row['case_id'] == case_id]
             if records[-1]['kind'] == 'scheduled':
-                recorder.append('evaluated', case_id, 'not-run', data={'partition': 'not-run',
-                    'reason': 'fail-fast', 'block_reason': 'reset-blocked', 'evaluation_identity': 'fail-fast-v1'})
+                recorder.append('evaluated', case_id, 'not-run', data={
+                    **asdict(EvaluationRecord(case_id, 'not-run', 'unavailable', 'fail-fast', None, None)),
+                    'evaluation_identity': SCHEDULER_SKIP})

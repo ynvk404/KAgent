@@ -43,11 +43,11 @@ class Progress:
             self.say(f'  Execution      {row["status"]} | {elapsed}; evaluation pending')
             self.say(f'Progress: {self.finished}/{len(self.order)} executions finished')
         elif row['kind'] == 'evaluated':
-            self.say(f'  Evaluator      {row["data"]["partition"]} ({row["data"]["reason"]})')
+            self.say(f'  Evaluator      {row["data"]["assessment_status"]} ({row["data"]["assessment_reason"]})')
 
     def evaluated(self, report):
         self.say('\nPost-run evaluator classification:')
         for record in report['records']:
-            label = f' / {record["confusion"]}' if record['confusion'] else ''
-            self.say(f'  {record["case_id"]}: {record["partition"]}{label}')
+            label = f' / {record["assessment_confusion"]}' if record['assessment_confusion'] else ''
+            self.say(f'  {record["case_id"]}: {record["execution_status"]} / {record["assessment_status"]}{label}')
         self.say(f'Total elapsed: {time.monotonic() - self.started:.1f}s (execution + evaluation + publication)')

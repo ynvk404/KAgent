@@ -6,13 +6,13 @@ from decimal import Decimal, localcontext
 import math
 from typing import Any, Sequence
 
-from benchmarks.common.contracts import CLASSES, PARTITIONS
+from benchmarks.common.contracts import CLASSES, ASSESSMENT_STATUSES
 from benchmarks.common.metrics import distribution
 from .model import ReportModel
 
 CLASS_LABELS = (('SQLi', CLASSES[0]), ('XSS', CLASSES[1]), ('Tổng', None))
-PARTITION_LABELS = dict(zip(PARTITIONS, (
-    'Đánh giá được', 'Chưa có kết luận', 'Lỗi thực thi', 'Kết quả không hợp lệ', 'Chưa chạy')))
+ASSESSMENT_LABELS = dict(zip(ASSESSMENT_STATUSES, (
+    'Đã chấp nhận', 'Chưa có kết luận', 'Không hợp lệ', 'Không có kết quả')))
 STATUS_LABELS = {
     'timeout': 'Quá thời gian', 'runtime-error': 'Lỗi thực thi',
     'provider-error': 'Lỗi dịch vụ LLM', 'budget-exhausted': 'Đạt giới hạn tài nguyên',
@@ -121,6 +121,35 @@ def _metric_cell(summary: ResourceSummary, divisor: int) -> str:
     return f'{format_decimal(summary.median, divisor)}<br>{summary.coverage}'
 
 
+def _evaluation_tables(groups: list[tuple[str, dict]]) -> list[str]:
+    rate = lambda g, key: 'NA' if g[key] is None else format_decimal(g[key] * 100) + '%'
+    lines = ['## T1A — Execution', '']
+    lines += _table(('Lớp', 'Tổng case', 'Completed', 'Completion Rate'), [
+        [label, str(g['scheduled']), str(g['completed']), rate(g, 'completion_rate')] for label, g in groups])
+    statuses = sorted({status for _, g in groups for status in g['execution_status_counts']})
+    lines += _table(('Lớp', *statuses), [[label, *[str(g['execution_status_counts'].get(s, 0))
+        for s in statuses]] for label, g in groups])
+    lines += ['Completion Rate = completed / tổng case đã lên lịch. Trạng thái do parent ghi nhận; '
+              'assessment hợp lệ không chuyển timeout, budget-exhausted hoặc lỗi thành completed. '
+              'started là ca đã bắt đầu nhưng thiếu parent finish; not-run là ca chưa bắt đầu.', '',
+              '## T1B — Assessment', '']
+    lines += _table(('Lớp', 'Accepted', 'Unresolved', 'Invalid', 'Unavailable', 'Assessment Coverage'), [
+        [label, *[str(g['assessment_status_counts'][s]) for s in ('accepted', 'unresolved', 'invalid', 'unavailable')],
+         rate(g, 'assessment_coverage')] for label, g in groups])
+    lines += ['Assessment Coverage = accepted terminal assessments / tổng case đã lên lịch. '
+              'Accepted yêu cầu canonical export có parent receipt, đúng hash/identity, kết quả mới nhất '
+              'và đủ evidence/provenance/binding, kể cả execution thất bại. Unresolved có kết luận chưa '
+              'terminal; Invalid không đạt kiểm tra; Unavailable thiếu export, kết quả hoặc parent receipt. '
+              'Không phục hồi assessment từ log/session. Mỗi case được đếm một lần trong mỗi chiều; '
+              'không cộng hai chiều thành một tổng case.', '', '## T1C — Confusion counts', '']
+    lines += _table(('Lớp', 'TP', 'TN', 'FP', 'FN'), [
+        [label, *[str(g[k]) for k in ('TP', 'TN', 'FP', 'FN')]] for label, g in groups])
+    lines += ['Chỉ assessment accepted mới vào TP/TN/FP/FN. confirmed đối chiếu ground truth thành TP/FP; '
+              'not-confirmed thành FN/TN. Unresolved, Invalid và Unavailable không phải kết luận âm. '
+              'Mỗi case có một evaluation record với execution status và assessment status độc lập.', '']
+    return lines
+
+
 def render_thesis_tables(model: ReportModel) -> bytes:
     kind = model.metadata['classification']
     if kind == 'development':
@@ -131,27 +160,10 @@ def render_thesis_tables(model: ReportModel) -> bytes:
         context = 'Official — phân loại do người vận hành khai báo; không chứng nhận tính hợp lệ khoa học.'
     else:
         context = 'Chưa khai báo trạng thái Official; không trình bày như kết quả chính thức.'
-    lines = ['# Scenario 1 — Bảng và chú thích hình', '', context, '',
-             '## T1A — Kết quả đánh giá', '']
+    lines = ['# Scenario 1 — Bảng và chú thích hình', '', context, '']
     groups = [(label, model.metrics['overall'] if cls is None else model.metrics['classes'][cls])
               for label, cls in CLASS_LABELS]
-    lines += _table(('Lớp', 'Tổng case', *PARTITION_LABELS.values()),
-                    [[label, str(g['scheduled']), *[str(g[p]) for p in PARTITIONS]] for label, g in groups])
-    lines += ['“Đánh giá được” (Evaluable): lần chạy hoàn tất, có kết luận hợp lệ của Agent '
-              'để đối chiếu với nhãn chuẩn (ground truth). “Chưa có kết luận” (Unresolved): '
-              'chưa có kết luận, thiếu bằng chứng hoặc còn bị chặn/trì hoãn. “Lỗi thực thi” '
-              '(Execution failed): lần chạy không hoàn tất hoặc bị gián đoạn sau khi bắt đầu. '
-              '“Kết quả không hợp lệ” (Invalid result): tệp kết quả của lần chạy thiếu/hỏng '
-              'hoặc kết luận không đạt kiểm tra tính hợp lệ. “Chưa chạy” (Not run): case chưa bắt đầu. '
-              'Bốn nhóm sau không đủ điều kiện đưa vào TP/TN/FP/FN; không coi là TN hoặc FN.', '']
-    lines += ['## T1B — Confusion counts', '']
-    lines += _table(('Lớp', 'TP', 'TN', 'FP', 'FN'),
-                    [[label, *[str(g[p]) for p in ('TP', 'TN', 'FP', 'FN')]] for label, g in groups])
-    lines += ['Chỉ đếm các case đánh giá được: TP là xác nhận đúng lỗ hổng; TN là không xác nhận '
-              'lỗ hổng trên case không có lỗ hổng theo nhãn chuẩn; FP là xác nhận nhầm lỗ hổng; '
-              'FN là không xác nhận lỗ hổng trên case có lỗ hổng theo nhãn chuẩn. '
-              'Kết luận hợp lệ “không xác nhận lỗ hổng” khác với “chưa có kết luận”: kết luận này '
-              'được tính là TN hoặc FN khi đối chiếu với nhãn chuẩn.', '']
+    lines += _evaluation_tables(groups)
     for panel, metric, heading, divisor in (
             ('A', 'agent_seconds', 'Thời gian xử lý (s)', 1),
             ('B', 'total_tokens', 'Tổng token (nghìn)', 1000)):
@@ -198,11 +210,11 @@ def render_thesis_tables(model: ReportModel) -> bytes:
         lines += ['## Ledger — Không có trạng thái kết thúc', '']
         rows = []
         for label, cls in CLASS_LABELS[:2]:
-            for partition in PARTITIONS:
+            for assessment in ASSESSMENT_STATUSES:
                 cases = [case for case in missing if case['vulnerability_class'] == cls
-                         and case['evaluator_partition'] == partition]
+                         and case['assessment_status'] == assessment]
                 if cases:
-                    rows.append([label, PARTITION_LABELS[partition], str(len(cases)),
+                    rows.append([label, ASSESSMENT_LABELS[assessment], str(len(cases)),
                         _metric_cell(resource_summary(cases, 'agent_seconds'), 1),
                         _metric_cell(resource_summary(cases, 'total_tokens'), 1000)])
         lines += _table(('Lớp', 'Nhóm kết quả đánh giá', 'Số case', 'Trung vị thời gian đã ghi nhận (s)',
@@ -239,16 +251,11 @@ def render_thesis_tables(model: ReportModel) -> bytes:
               'với dấu chấm phân cách nghìn. CSV giữ nguyên giá trị gốc và độ chính xác.', '',
               '## Chú thích gợi ý', '',
               f'Ngữ cảnh áp dụng cho F1/F2/F3: {context}', '',
-              '**F1 — Chất lượng xác thực SQLi và XSS trong Scenario 1.** Recall, Precision và FPR '
-              'tính trên các case đánh giá được: Recall = TP/(TP+FN), tỷ lệ xác nhận đúng trong '
-              'các case có lỗ hổng theo nhãn chuẩn; Precision = TP/(TP+FP), tỷ lệ xác nhận đúng '
-              'trong các case Agent xác nhận có lỗ hổng; FPR = FP/(FP+TN), tỷ lệ xác nhận nhầm '
-              'trong các case không có lỗ hổng theo nhãn chuẩn. Tỷ lệ đánh giá được (Evaluability) '
-              '= số case đánh giá được / tổng case đã lên lịch. '
-              'Nhãn thể hiện % (tử số/mẫu số); NA khi mẫu số bằng 0. Các nhóm chưa có kết luận, lỗi '
-              'thực thi, kết quả không hợp lệ và chưa chạy không được tính vào TP/TN/FP/FN (xem T1A). '
-              'Recall và Precision cao hơn tốt hơn; FPR thấp hơn tốt hơn. Tỷ lệ đánh giá được '
-              'thể hiện mức bao phủ, không phải độ đúng.', '']
+              '**F1 — Chất lượng xác thực SQLi và XSS trong Scenario 1, evaluation v2.** '
+              'Recall = TP/(TP+FN), Precision = TP/(TP+FP), FPR = FP/(FP+TN), chỉ trên assessment '
+              'terminal accepted, kể cả execution thất bại. Nhãn là % (tử số/mẫu số); NA khi mẫu số bằng 0. '
+              'Recall/Precision cao hơn tốt hơn, FPR thấp hơn tốt hơn. Completion Rate và Assessment '
+              'Coverage được trình bày tại T1A/T1B; coverage là mức bao phủ, không phải độ đúng.', '']
     references = (' Các lần chạy chưa hoàn tất xem T2C.' if noncompleted else '') + (
         ' Case thiếu trạng thái kết thúc xem Ledger.' if missing else '')
     for metric, text in (

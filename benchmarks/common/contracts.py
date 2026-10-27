@@ -1,4 +1,4 @@
-"""Small v1 contracts. Operational envelopes deliberately have no truth fields."""
+"""Benchmark contracts; evaluation v2 is independent of execution/export schema v1."""
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field, fields
@@ -18,7 +18,8 @@ DEFAULT_SEED = 1729
 CLASSES = ("sql-injection", "cross-site-scripting")
 STATUSES = {"scheduled", "started", "completed", "timeout", "runtime-error", "provider-error",
             "budget-exhausted", "crashed", "setup-error", "not-run"}
-PARTITIONS = ("evaluable", "unresolved", "execution-failed", "invalid-result", "not-run")
+ASSESSMENT_STATUSES = ("accepted", "unresolved", "invalid", "unavailable")
+EVALUATION_SCHEMA = 2
 
 
 def digest(value: Any) -> str:
@@ -75,7 +76,8 @@ def decode(cls: type[T], raw: dict) -> T:
         raw = {**raw, 'http_dispatch_attempts': None}
     if not isinstance(raw, dict) or set(raw) != expected:
         raise ValueError(f"malformed {cls.__name__} fields")
-    if raw.get("schema_version") != SCHEMA or type(raw.get("schema_version")) is not int:
+    version = EVALUATION_SCHEMA if cls is EvaluationRecord else SCHEMA
+    if raw.get("schema_version") != version or type(raw.get("schema_version")) is not int:
         raise ValueError("unsupported schema version")
     return cls(**raw)
 
@@ -304,8 +306,36 @@ class CaseExecution:
 
 @dataclass(frozen=True)
 class EvaluationRecord:
+    """One current evaluation record per case, with two independent status dimensions."""
     case_id: str
-    partition: str
-    reason: str
-    confusion: str | None
-    schema_version: int = SCHEMA
+    execution_status: str
+    assessment_status: str
+    assessment_reason: str
+    assessment_outcome: str | None
+    assessment_confusion: str | None
+    schema_version: int = EVALUATION_SCHEMA
+
+    def __post_init__(self):
+        identifier(self.case_id)
+        if self.execution_status not in STATUSES - {'scheduled'}:
+            raise ValueError('invalid evaluation execution status')
+        if (self.assessment_status not in ASSESSMENT_STATUSES
+                or not isinstance(self.assessment_reason, str) or not self.assessment_reason):
+            raise ValueError('invalid assessment status/reason')
+        if self.assessment_status == 'accepted':
+            if (self.assessment_outcome not in {'confirmed', 'not-confirmed'}
+                    or self.assessment_confusion not in {'TP', 'FP', 'TN', 'FN'}
+                    or self.execution_status in {'started', 'not-run'}):
+                raise ValueError('invalid accepted assessment')
+            if ((self.assessment_outcome == 'confirmed') != (self.assessment_confusion in {'TP', 'FP'})
+                    or self.assessment_reason != 'accepted-agent-assessment'):
+                raise ValueError('assessment outcome/confusion/reason mismatch')
+        elif self.assessment_confusion is not None:
+            raise ValueError('unscorable assessment has a confusion label')
+        if self.execution_status in {'started', 'not-run'} and self.assessment_status != 'unavailable':
+            raise ValueError('assessment requires parent receipt')
+        if self.assessment_status == 'unresolved' and self.assessment_outcome not in {
+                'blocked', 'insufficient-evidence', 'deferred', 'browser-required', 'authorization-required'}:
+            raise ValueError('invalid unresolved assessment')
+        if self.assessment_status in {'invalid', 'unavailable'} and self.assessment_outcome is not None:
+            raise ValueError('untrusted assessment has an outcome')

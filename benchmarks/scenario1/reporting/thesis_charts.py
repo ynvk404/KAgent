@@ -5,7 +5,7 @@ from decimal import Decimal
 from html import escape
 from typing import Sequence
 
-from .aggregate import RATES, rate_parts
+from .aggregate import rate_parts
 from .model import ReportModel
 from .thesis import CLASS_LABELS, Number, class_cases, format_decimal, resource_summary
 
@@ -42,23 +42,20 @@ def _svg(height: int, title: str, description: str, body: list[str]) -> bytes:
 
 def validation_quality(model: ReportModel) -> bytes:
     body = []
+    rates = ('recall', 'precision', 'fpr')
     for index, (label, cls) in enumerate(CLASS_LABELS[:2]):
         group = model.metrics['classes'][cls]
         offset = index * 216
         body.append(_text(20, 28 + offset, label, 'class'))
         for tick in (0, 25, 50, 75, 100):
             body.append(_text(145 + 295 * tick / 100, 48 + offset, f'{tick}%', 'tick center number'))
-        for rate, color, center in zip(RATES, METRIC_COLORS, (78, 112, 146, 190)):
+        for rate, color, center in zip(rates, METRIC_COLORS, (78, 112, 146, 190)):
             y = center + offset
             numerator, denominator = rate_parts(group, rate)
             value = group[rate]
             body.append(f'<g data-class="{cls}" data-metric="{rate}" '
                         f'data-available="{str(denominator > 0).lower()}">')
-            if rate == 'evaluability':
-                body.append(f'<text x="32" y="{y + 5}"><tspan x="32" dy="-8">Tỷ lệ đánh giá</tspan>'
-                            '<tspan x="32" dy="17">được</tspan></text>')
-            else:
-                body.append(_text(32, y + 5, 'FPR' if rate == 'fpr' else rate.capitalize()))
+            body.append(_text(32, y + 5, 'FPR' if rate == 'fpr' else rate.capitalize()))
             body.append(_rect(145, y - 9, 295, 18, '#f1f3f5', 'track'))
             if denominator and value is not None and value > 0:
                 body.append(_rect(145, y - 9, round(295 * value, 4), 18, color, 'filled'))

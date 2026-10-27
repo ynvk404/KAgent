@@ -55,12 +55,12 @@ def test_separated_public_tree_and_offline_roundtrip(tmp_path, op, settings):
     assert {p.relative_to(legacy): p.read_bytes() for p in legacy.rglob('*') if p.is_file()} == before
     index = read_json(public / 'results/index.json')
     case = read_json(public / 'results' / f'{op.case_id}.json')
-    assert case['schema'] == 'scenario1-public-case-v3'
-    assert case['confusion'] == 'TP'
+    assert case['schema'] == 'scenario1-public-case-v4'
+    assert case['assessment_confusion'] == 'TP'
     assert case['case_id'] == op.case_id
     assert case['canonical']['result_sha256'] == file_hash(root / 'results' / f'{op.case_id}.json')
     assert case['projection_binding'] == digest({k: v for k, v in case.items() if k != 'projection_binding'})
-    assert index['schema'] == 'scenario1-public-results-v5'
+    assert index['schema'] == 'scenario1-public-results-v6'
     assert index['storage_id'] == root.name
     assert index['run_id'] == baseline.metadata['run_id']
     assert not Path(index['internal_ref']).is_absolute()
@@ -127,7 +127,7 @@ async def test_public_selected_evidence_and_secrets(tmp_path, monkeypatch, op, s
     assert report['records'] == baseline['records'] and report['metrics'] == baseline['metrics']
     writer.write_report(root)
     case = read_json(public / 'results' / f'{op.case_id}.json')
-    assert case['confusion'] == 'TP'
+    assert case['assessment_confusion'] == 'TP'
     assert case['selected_evidence']
     text = '\n'.join(p.read_text() for p in public.rglob('*') if p.is_file())
     assert secret not in text and str(workspace) not in text
@@ -319,7 +319,7 @@ def test_interrupted_and_blocked_forensics_and_resume(tmp_path, monkeypatch, op,
     assert not public.exists()
     history = (root / 'events.jsonl').read_bytes()
     evaluation = evaluate(root)
-    assert evaluation['incomplete'] and evaluation['records'][0]['partition'] == 'execution-failed'
+    assert evaluation['incomplete'] and evaluation['records'][0]['assessment_status'] == 'unavailable'
     writer.write_report(root)
     assert read_json(public / 'report/report.json')['execution_state'] == ('blocked' if blocked else 'interrupted')
     assert load_report(public).metadata['incomplete'] is True
@@ -457,8 +457,8 @@ def test_invalid_canonical_result_keeps_safe_reason_and_no_confusion(tmp_path, m
     evaluation = evaluate(root)
     public = writer.write_report(root)
     case = read_json(public / 'results' / f'{op.case_id}.json')
-    assert evaluation['records'][0]['partition'] == case['evaluator_partition'] == 'invalid-result'
-    assert case['evaluator_reason'] == 'result artifact hash mismatch'
-    assert case['confusion'] is None and case['selected_evidence'] == []
+    assert evaluation['records'][0]['assessment_status'] == case['assessment_status'] == 'invalid'
+    assert case['assessment_reason'] == 'result artifact hash mismatch'
+    assert case['assessment_confusion'] is None and case['selected_evidence'] == []
     assert resolve_run(public) == root
     assert result.read_bytes() == before

@@ -35,7 +35,7 @@ async def test_v8_retry_metadata_compatibility_preserves_evaluation(
     before = {p.relative_to(root): p.read_bytes() for p in root.rglob('*') if p.is_file()}
     report = evaluate(root, publish=False)
     assert report == evaluate(root, publish=False)
-    assert report['records'][0]['partition'] == 'evaluable'
+    assert report['records'][0]['assessment_status'] == 'accepted'
     assert report['metrics']['overall']['TP'] == 1
     assert {p.relative_to(root): p.read_bytes() for p in root.rglob('*') if p.is_file()} == before
 
@@ -119,9 +119,9 @@ async def test_optional_retry_uses_latest_attempt_once(
     root = tmp_path / 'recorded'
     recorded_run(root, single_manifest(op, settings), execution)
     report = evaluate(root, publish=False)
-    assert len(report['records']) == 1 and report['records'][0]['confusion'] == confusion
+    assert len(report['records']) == 1 and report['records'][0]['assessment_confusion'] == confusion
     counts = report['metrics']['overall']
-    assert counts['evaluable'] == sum(counts[key] for key in ('TP', 'TN', 'FP', 'FN')) == 1
+    assert counts['assessment_accepted'] == sum(counts[key] for key in ('TP', 'TN', 'FP', 'FN')) == 1
 
 
 async def test_retry_at_step_limit_keeps_prior_result_and_never_becomes_negative(
@@ -138,8 +138,8 @@ async def test_retry_at_step_limit_keeps_prior_result_and_never_becomes_negative
     root = tmp_path / 'recorded'
     recorded_run(root, single_manifest(op, settings), execution)
     record = evaluate(root, publish=False)['records'][0]
-    assert record['partition'] == 'execution-failed' and record['reason'] == 'budget-exhausted'
-    assert record['confusion'] is None
+    assert record['execution_status'] == 'budget-exhausted' and record['assessment_status'] == 'unresolved'
+    assert record['assessment_confusion'] is None
 
 
 class ReopeningClient(FindingClient):
@@ -162,4 +162,4 @@ async def test_reopen_after_saved_finding_cannot_create_unresolved_second_attemp
     assert workflow['persisted_findings']
     root = tmp_path / 'recorded'
     recorded_run(root, single_manifest(op, settings), execution)
-    assert evaluate(root, publish=False)['records'][0]['confusion'] == 'TP'
+    assert evaluate(root, publish=False)['records'][0]['assessment_confusion'] == 'TP'

@@ -13,12 +13,14 @@ import xml.etree.ElementTree as ET
 
 import pytest
 
-from benchmarks.common.contracts import (CLASSES, PARTITIONS, CanonicalResultExport, CaseExecution, RuntimeMetrics,
-    decode, digest, file_hash, RunManifest, RuntimeSettings, write_new)
+from benchmarks.common.contracts import (CLASSES, ASSESSMENT_STATUSES, EvaluationRecord, OperationalCaseInput, CanonicalResultExport, CaseExecution, RuntimeMetrics,
+    decode, digest, file_hash, read_json, RunManifest, RuntimeSettings, write_new)
 from benchmarks.common.recorder import Recorder, read_records, validate_lifecycle
 from benchmarks.scenario1.__main__ import main
 from benchmarks.scenario1.core.classification import write_run_classification
-from benchmarks.scenario1.reporting.aggregate import partition_rows, summary_rows
+from benchmarks.scenario1.reporting.aggregate import groups, summary_rows
+from benchmarks.scenario1.core.assessment import assessment_metrics
+from benchmarks.scenario1.core.bindings import EVALUATOR, SCHEDULER_SKIP, evaluation_identity
 from benchmarks.scenario1.reporting.charts import render_charts
 from benchmarks.scenario1.reporting.loader import load_report, presentation_id
 from benchmarks.scenario1.reporting.tables import render_tables
@@ -34,18 +36,24 @@ def settings_target(manifest):
 
 
 def _group(records):
-    counts = {part: sum(r['partition'] == part for r in records) for part in PARTITIONS}
-    confusion = {label: sum(r['confusion'] == label for r in records) for label in ('TP', 'TN', 'FP', 'FN')}
-    tp, tn, fp, fn = (confusion[k] for k in ('TP', 'TN', 'FP', 'FN'))
-    ratio = lambda n, d: n / d if d else None
-    return {'scheduled': len(records), 'started': len(records), 'completed': len(records),
-            **counts, **confusion, 'recall': ratio(tp, tp + fn),
-            'precision': ratio(tp, tp + fp), 'fpr': ratio(fp, fp + tn),
-            'evaluability': ratio(counts['evaluable'], len(records))}
+    return assessment_metrics(records)
+
+
+_EXPORT_FIXTURES = {}
 
 
 def _fixture(tmp_path, manifest, *, partitions=None, result=True, parent_status='completed',
              worker_status='completed', classification=None, legacy_dispatch=False):
+    """Use real workflow acceptance and exports; mock only model and HTTP I/O."""
+    import asyncio
+    from concurrent.futures import ThreadPoolExecutor
+    from unittest.mock import patch
+    from urllib.parse import urlencode, urlsplit, parse_qs
+    import httpx
+    from benchmarks.scenario1.core.evaluate import evaluate
+    from benchmarks.scenario1.core.runtime import execute_case
+    from tests.benchmarks.test_scenario1 import FindingClient
+
     root = tmp_path / 'run'
     root.mkdir()
     write_new(root / 'manifest.json', asdict(manifest))
@@ -53,27 +61,85 @@ def _fixture(tmp_path, manifest, *, partitions=None, result=True, parent_status=
         write_run_classification(root, classification)
     recorder = Recorder(root / 'events.jsonl', manifest.run_id)
     truth = {row['case_id']: row for row in manifest.truth}
-    records = []
-    for index, cid in enumerate(manifest.execution_order):
-        partition = (partitions or {}).get(cid, 'evaluable')
-        if parent_status != 'completed' and partition != 'not-run':
-            partition = 'execution-failed'
-        vulnerable = truth[cid]['expected_vulnerable']
-        confusion = ('TP' if vulnerable else 'TN') if partition == 'evaluable' else None
-        records.append({'case_id': cid, 'partition': partition,
-                        'reason': ('accepted-agent-assessment' if partition == 'evaluable' else
-                                   'interrupted-before-start' if partition == 'not-run' else
-                                   parent_status if partition == 'execution-failed' else 'insufficient-evidence'),
-                        'confusion': confusion, 'schema_version': 1})
-        operation = next(row for row in manifest.operational if row['case_id'] == cid)
-        recorder.append('scheduled', cid, 'scheduled', data={
+    operations = {op['case_id']: op for op in manifest.operational}
+    for cid in manifest.execution_order:
+        operation = operations[cid]
+        recorder.append('scheduled', operation['case_id'], 'scheduled', data={
             'manifest_hash': digest(asdict(manifest)), 'operational_hash': digest(operation)})
     for index, cid in enumerate(manifest.execution_order):
-        if records[index]['partition'] == 'not-run':
+        operation = operations[cid]
+        requested = (partitions or {}).get(cid, 'accepted')
+        if requested == 'not-run':
             continue
         eid = f'ex{index}'
         recorder.append('started', cid, 'started', execution_id=eid)
         if result:
+            outcome = ('insufficient-evidence' if requested == 'unresolved'
+                       else 'confirmed' if truth[cid]['expected_vulnerable'] else 'not-confirmed')
+            op = decode(OperationalCaseInput, operation)
+            config = decode(RuntimeSettings, manifest.runtime)
+            class FixtureClient(FindingClient):
+                def tool(self, name, args):
+                    if name == 'http':
+                        pairs = [list(pair) for pair in op.query]
+                        body = [list(pair) for pair in op.body]
+                        headers, cookies = dict(op.headers), dict(op.cookies)
+                        marker = parse_qs(urlsplit(args['url']).query).get('q', ['bounded-marker'])[0]
+                        if op.input_location in {'query', 'body'}:
+                            selected = pairs if op.input_location == 'query' else body
+                            for row in selected:
+                                if row[0] == op.input_name:
+                                    row[1] = marker
+                        elif op.input_location == 'header':
+                            headers[op.input_name] = marker
+                        else:
+                            cookies[op.input_name] = marker
+                        url = config.target + config.context_path + op.servlet_path
+                        if pairs:
+                            url += '?' + urlencode([(row[0], row[1]) for row in pairs])
+                        if cookies:
+                            headers['Cookie'] = '; '.join(k + '=' + v for k, v in cookies.items())
+                        if op.content_type:
+                            headers['Content-Type'] = op.content_type
+                        args = {'method': op.method, 'url': url, 'headers': headers, 'phase': 'validation'}
+                        if body:
+                            args['body'] = urlencode([(row[0], row[1]) for row in body])
+                    if name == 'confirm_finding':
+                        args = {**args, 'url': config.target + config.context_path + op.servlet_path,
+                                'method': op.method, 'parameter': op.input_name}
+                    return super().tool(name, args)
+            workspace = root / 'fixture-workspaces' / eid
+            workspace.mkdir(parents=True)
+            real_client = httpx._client.AsyncClient
+            def handler(request):
+                return httpx.Response(200, content=f'<html>{request.url} {request.content.decode()}</html>'.encode(),
+                                      headers={'Content-Type': 'text/html'}, request=request)
+            async def produce():
+                import os
+                previous = Path.cwd()
+                previous_project = os.environ.get('KAGENT_PROJECT_ROOT')
+                try:
+                    os.chdir(workspace)
+                    return await execute_case(op, config, workspace, manifest.run_id, eid,
+                                              FixtureClient(outcome, skill=op.vulnerability_class))
+                finally:
+                    os.chdir(previous)
+                    if previous_project is None:
+                        os.environ.pop('KAGENT_PROJECT_ROOT', None)
+                    else:
+                        os.environ['KAGENT_PROJECT_ROOT'] = previous_project
+            key = digest([operation, manifest.runtime, manifest.run_id, outcome, eid])
+            if key not in _EXPORT_FIXTURES:
+                with patch('httpx.AsyncClient', lambda **kw: real_client(transport=httpx.MockTransport(handler), **kw)):
+                    with ThreadPoolExecutor(max_workers=1) as executor:
+                        _EXPORT_FIXTURES[key] = executor.submit(lambda: asyncio.run(produce())).result()
+            from copy import deepcopy
+            execution = deepcopy(_EXPORT_FIXTURES[key])
+            assert execution.result is not None
+            if requested == 'invalid':
+                execution.result['accepted_at_freeze'] = False
+            elif requested == 'unavailable':
+                execution = replace(execution, result=None)
             metrics = asdict(RuntimeMetrics(1.25, 0.1, 0.1, None,
                 {'total_llm_calls': 2, 'tokens': {
                     'input_tokens': {'total': None, 'observed_sum': 12, 'complete': False},
@@ -82,42 +148,15 @@ def _fixture(tmp_path, manifest, *, partitions=None, result=True, parent_status=
                 {'proposed': 3, 'executed': 2, 'result_events': 2, 'blocked': 1, 'failed': 1}, 5, 2))
             if legacy_dispatch:
                 del metrics['http_dispatch_attempts']
-            # Focused projection fixture: decodable frozen export; no workflow rescoring.
-            canonical = asdict(CanonicalResultExport(manifest.run_id, cid, eid, 'session', 'candidate',
-                None, {'base_url': settings_target(manifest), 'origin': settings_target(manifest), 'revision': 0},
-                'epoch', {}, 'result', 0, True, 'a' * 64)) if records[index]['partition'] == 'evaluable' else None
-            write_new(root / 'results' / f'{cid}.json', asdict(CaseExecution(
-                manifest.run_id, cid, eid, worker_status, None, canonical, metrics, {})))
-        status = 'crashed' if records[index]['partition'] == 'execution-failed' and parent_status == 'completed' else parent_status
-        if records[index]['partition'] == 'execution-failed':
-            records[index]['reason'] = status
+            execution = replace(execution, status=worker_status, metrics=metrics)
+            write_new(root / 'results' / f'{cid}.json', asdict(execution))
         path = root / 'results' / f'{cid}.json'
-        recorder.append('runtime-finished', cid, status, execution_id=eid,
-                        data={'wall_seconds': 2.5,
-                              'result_ref': f'results/{cid}.json' if result else None,
-                              'result_sha256': file_hash(path) if result else None,
-                              'canonical_summary': {'outcome': 'confirmed' if truth[cid]['expected_vulnerable'] else 'not-confirmed'}})
-    rows, partial = read_records(root / 'events.jsonl')
-    identity = digest(['offline-agent-assessment-v1', asdict(manifest), rows, partial])
-    for cid in manifest.execution_order:
-        group = next(r for r in records if r['case_id'] == cid)
-        history = [row for row in rows if row['case_id'] == cid]
-        last = history[-1]
-        recorder.append('evaluated', cid, last['status'], execution_id=last['execution_id'],
-                        data={**group, 'evaluation_identity': identity})
-    by_class = {cls: [r for r in records if truth[r['case_id']]['vulnerability_class'] == cls] for cls in CLASSES}
-    evaluation = {'schema_version': 1, 'run_id': manifest.run_id, 'evaluation_identity': identity,
-                  'evaluator_version': 'offline-agent-assessment-v1', 'records': records,
-                  'partial_tail_ignored': False, 'incomplete': any(r['partition'] == 'not-run' for r in records),
-                  'metrics': {'overall': _group(records),
-                              'classes': {cls: _group(by_class[cls]) for cls in CLASSES}}}
-    histories = validate_lifecycle(rows)
-    for group, ids in [(evaluation['metrics']['overall'], manifest.execution_order),
-                       *[(evaluation['metrics']['classes'][cls], [r['case_id'] for r in by_class[cls]]) for cls in CLASSES]]:
-        group['started'] = sum(any(e['kind'] == 'started' for e in histories[cid]) for cid in ids)
-        group['completed'] = sum(any(e['kind'] == 'runtime-finished' and e['status'] == 'completed' for e in histories[cid]) for cid in ids)
-    write_new(root / f'evaluation-{identity}.json', evaluation)
-    return root, evaluation
+        status = 'crashed' if requested == 'execution-failed' and parent_status == 'completed' else parent_status
+        recorder.append('runtime-finished', cid, status, execution_id=eid, data={
+            'wall_seconds': 2.5, 'result_ref': f'results/{cid}.json' if result else None,
+            'result_sha256': file_hash(path) if result else None,
+            'canonical_summary': {'outcome': 'confirmed' if truth[cid]['expected_vulnerable'] else 'not-confirmed'}})
+    return root, evaluate(root)
 
 
 def _csv(contents: bytes):
@@ -158,12 +197,10 @@ def test_transport_dispatch_is_distinct_from_admission(tmp_path, op, settings):
 
 def test_invalid_result_can_have_unreadable_diagnostic_export(tmp_path, op, settings):
     root, _ = _fixture(tmp_path, single_manifest(op, settings),
-                       partitions={op.case_id: 'invalid-result'})
+                       partitions={op.case_id: 'invalid'})
     (root / 'results' / f'{op.case_id}.json').write_text('{invalid')
-    case = load_report(root).cases[0]
-    assert case['evaluator_partition'] == 'invalid-result'
-    assert case['worker_status'] is None and case['http_dispatch_attempts'] is None
-    assert case['confusion'] is None
+    with pytest.raises(ValueError, match='assessment/canonical'):
+        load_report(root)
 
 
 def test_missing_result_not_run_and_strict_case_set(tmp_path, op, settings):
@@ -240,7 +277,7 @@ def test_smoke_legacy_and_dynamic_multi_case(tmp_path):
     from tests.benchmarks.test_scenario1 import make_dataset
     manifest = replace(select(make_dataset(tmp_path / 'dataset'), 'smoke-run', 'smoke'),
                        runtime=asdict(RuntimeSettings('http://127.0.0.1:3000', '/benchmark', True, 'confirmation-only')))
-    partitions = {cid: ('unresolved', 'execution-failed', 'invalid-result', 'not-run')[index % 4]
+    partitions = {cid: ('unresolved', 'unavailable', 'invalid', 'not-run')[index % 4]
                   for index, cid in enumerate(manifest.execution_order)}
     root, evaluation = _fixture(tmp_path, manifest, partitions=partitions)
     model = load_report(root)
@@ -250,20 +287,19 @@ def test_smoke_legacy_and_dynamic_multi_case(tmp_path):
             model.metadata['classification_declared']) == ('development', 'smoke', False)
     assert all(model.metrics['overall'][key] == evaluation['metrics']['overall'][key]
                for key in model.metrics['overall'])
-    for row in partition_rows(model)[1:]:
-        assert sum(row[part.replace('-', '_')] for part in PARTITIONS) == row['scheduled']
+    for row in [{**g['assessment_status_counts'], 'scheduled': g['scheduled']} for _, g in list(groups(model))[1:]]:
+        assert sum(row[part.replace('-', '_')] for part in ASSESSMENT_STATUSES) == row['scheduled']
     svg = render_charts(model)
     for contents in svg.values():
         ET.fromstring(contents)
     assert b'<text' in svg['charts/confusion-matrix.svg']
-    assert all(case['confusion'] is None for case in model.cases)
+    assert all(case['assessment_confusion'] is None for case in model.cases)
 
 
 def test_privacy_determinism_immutability_and_cli(tmp_path, op, settings, capsys):
-    root, _ = _fixture(tmp_path, single_manifest(op, settings), partitions={op.case_id: 'invalid-result'})
+    root, _ = _fixture(tmp_path, single_manifest(op, settings), partitions={op.case_id: 'invalid'})
     evaluation_path = next(root.glob('evaluation-*.json'))
     data = json.loads(evaluation_path.read_text())
-    data['records'][0]['reason'] = 'fixture-secret'
     evaluation_path.write_text(json.dumps(data))
     events = root / 'events.jsonl'
     rows = [json.loads(line) for line in events.read_text().splitlines()]
@@ -271,14 +307,13 @@ def test_privacy_determinism_immutability_and_cli(tmp_path, op, settings, capsys
     finish['data']['runtime_metadata'] = {'provider': 'provider-secret',
                                           'model': 'model-credential'}
     evaluated = next(row for row in rows if row['kind'] == 'evaluated')
-    evaluated['data']['reason'] = data['records'][0]['reason']
     events.write_text(''.join(json.dumps(row) + '\n' for row in rows))
     _rebind(root)
     inputs = {p.relative_to(root): hashlib.sha256(p.read_bytes()).hexdigest()
               for p in root.rglob('*') if p.is_file()}
     first = write_report(root)
     output = {p.relative_to(first): p.read_bytes() for p in first.rglob('*') if p.is_file()}
-    assert {str(path) for path in output} >= {'report.json', 'summary.csv', 'partitions.csv', 'per-case.csv',
+    assert {str(path) for path in output} >= {'report.json', 'summary.csv', 'execution.csv', 'assessments.csv', 'per-case.csv',
                            'charts/confusion-matrix.svg', 'charts/class-metrics.svg',
                            'charts/evaluation-partitions.svg', 'charts/processing-time.svg',
                            'charts/total-tokens.svg'}
@@ -302,26 +337,24 @@ def _save_rows(root, rows):
 
 
 def _rebind(root):
-    """Rebuild v1 binding for deliberate valid projection-fixture changes."""
-    old = next(root.glob('evaluation-*.json'))
-    evaluation = json.loads(old.read_text())
-    manifest = decode(RunManifest, json.loads((root / 'manifest.json').read_text()))
+    """Re-evaluate deliberate fixture edits through the current production contract."""
+    from benchmarks.scenario1.core.evaluate import evaluate
+    manifest = decode(RunManifest, read_json(root / 'manifest.json'))
     rows, partial = read_records(root / 'events.jsonl')
     operations = {op['case_id']: op for op in manifest.operational}
-    for row in rows:
+    rows = [row for row in rows if row['kind'] != 'evaluated']
+    for index, row in enumerate(rows):
+        row['sequence'] = index + 1
         if row['kind'] == 'scheduled':
             row['data'].update(manifest_hash=digest(asdict(manifest)),
                                operational_hash=digest(operations[row['case_id']]))
-    identity = digest(['offline-agent-assessment-v1', asdict(manifest),
-                       [row for row in rows if row['kind'] != 'evaluated'], partial])
-    evaluation['evaluation_identity'] = identity
-    for row in rows:
-        if row['kind'] == 'evaluated':
-            row['data']['evaluation_identity'] = identity
     _save_rows(root, rows)
-    old.unlink()
-    write_new(root / f'evaluation-{identity}.json', evaluation)
-    return evaluation
+    if partial:
+        with (root / 'events.jsonl').open('ab') as stream:
+            stream.write(b'{partial')
+    for old in root.glob('evaluation-*.json'):
+        old.unlink()
+    return evaluate(root)
 
 
 def _evaluated_run(tmp_path, op, settings, *, status='completed', started=True,
@@ -352,30 +385,30 @@ def _evaluated_run(tmp_path, op, settings, *, status='completed', started=True,
 
 
 @pytest.mark.parametrize('status,started,finish,result,torn,partial,partition', [
-    ('completed', True, True, True, False, False, 'unresolved'),
-    ('crashed', True, True, True, False, False, 'execution-failed'),
-    ('timeout', True, True, False, False, False, 'execution-failed'),
-    ('completed', True, True, True, True, False, 'invalid-result'),
-    ('completed', True, True, False, False, False, 'invalid-result'),
-    ('completed', True, False, True, False, False, 'execution-failed'),
-    ('completed', True, False, True, True, True, 'execution-failed'),
-    ('completed', True, False, False, False, True, 'execution-failed'),
-    ('completed', False, False, False, False, False, 'not-run'),
+    ('completed', True, True, True, False, False, 'unavailable'),
+    ('crashed', True, True, True, False, False, 'unavailable'),
+    ('timeout', True, True, False, False, False, 'unavailable'),
+    ('completed', True, True, True, True, False, 'invalid'),
+    ('completed', True, True, False, False, False, 'unavailable'),
+    ('completed', True, False, True, False, False, 'unavailable'),
+    ('completed', True, False, True, True, True, 'unavailable'),
+    ('completed', True, False, False, False, True, 'unavailable'),
+    ('completed', False, False, False, False, False, 'unavailable'),
 ])
-def test_evaluator_generated_integration_and_v1_identity(
+def test_evaluator_generated_integration_and_v2_identity(
         tmp_path, op, settings, status, started, finish, result, torn, partial, partition):
     root, evaluation = _evaluated_run(tmp_path, op, settings, status=status, started=started,
         finish=finish, result=result, torn=torn, partial=partial)
     manifest = decode(RunManifest, json.loads((root / 'manifest.json').read_text()))
     rows, tail = read_records(root / 'events.jsonl')
-    original_input = ['offline-agent-assessment-v1', asdict(manifest),
+    original_input = [EVALUATOR, asdict(manifest),
                       [e for e in rows if e['kind'] != 'evaluated'], tail]
     if evaluation.get('orphan_exports'):
         original_input.append(evaluation['orphan_exports'])
     assert digest(original_input) == evaluation['evaluation_identity']
     before = {str(p.relative_to(root)): p.read_bytes() for p in root.rglob('*') if p.is_file()}
     model = load_report(root)
-    assert model.cases[0]['evaluator_partition'] == partition
+    assert model.cases[0]['assessment_status'] == partition
     assert model.metadata['partial_tail_ignored'] is partial
     assert model.metadata['incomplete'] is (partial or not finish)
     if not finish:
@@ -421,11 +454,12 @@ def test_recorded_evaluation_conflicts_fail(tmp_path, op, settings, change):
     root, _ = _fixture(tmp_path, single_manifest(op, settings))
     rows, _ = read_records(root / 'events.jsonl')
     evaluated = next(e for e in rows if e['kind'] == 'evaluated')
-    key = 'evaluation_identity' if change == 'identity' else change
-    evaluated['data'][key] = {'identity': 'b' * 64, 'partition': 'unresolved',
-        'reason': 'blocked', 'confusion': 'FN', 'schema_version': 99}[change]
+    key = {'identity': 'evaluation_identity', 'partition': 'assessment_status',
+           'reason': 'assessment_reason', 'confusion': 'assessment_confusion'}[change] if change != 'schema_version' else change
+    evaluated['data'][key] = {'identity': 'b' * 64, 'assessment_status': 'unresolved',
+        'assessment_reason': 'blocked', 'assessment_confusion': 'FN', 'schema_version': 99}[key if change != 'identity' else 'identity']
     _save_rows(root, rows)
-    with pytest.raises(ValueError, match='conflicting'):
+    with pytest.raises(ValueError, match='conflicting|assessment|EvaluationRecord|schema'):
         load_report(root)
 
 
@@ -434,17 +468,18 @@ def test_fail_fast_exception_and_multiple_valid_evaluations(tmp_path, op, settin
                                      result=False, publish=False)
     recorder = Recorder(root / 'events.jsonl', 'run')
     recorder.append('evaluated', op.case_id, 'not-run', data={
-        'partition': 'not-run', 'reason': 'fail-fast', 'evaluation_identity': 'fail-fast-v1'})
+        **asdict(EvaluationRecord(op.case_id, 'not-run', 'unavailable', 'fail-fast', None, None)),
+        'evaluation_identity': SCHEDULER_SKIP})
     from benchmarks.scenario1.core.evaluate import evaluate
     # Non-evaluated rows are unchanged: fail-fast reason can legitimately replace
     # the read-only interruption reason, but the old evaluation must be rejected.
-    with pytest.raises(ValueError, match='interruption mismatch'):
+    with pytest.raises(ValueError, match='assessment/canonical'):
         load_report(root)
     old = next(root.glob('evaluation-*.json'))
     old.unlink()
     updated = evaluate(root)
     assert updated['evaluation_identity'] == evaluation['evaluation_identity']
-    assert load_report(root).cases[0]['evaluator_reason'] == 'fail-fast'
+    assert load_report(root).cases[0]['assessment_reason'] == 'fail-fast'
     rows, _ = read_records(root / 'events.jsonl')
     _save_rows(root, rows)
     with (root / 'events.jsonl').open('ab') as stream:
@@ -492,7 +527,7 @@ def test_result_inventory_and_bindings(tmp_path, op, settings, change):
         load_report(root)
 
 
-@pytest.mark.parametrize('partition', ['invalid-result', 'execution-failed'])
+@pytest.mark.parametrize('partition', ['invalid', 'execution-failed'])
 @pytest.mark.parametrize('change', ['missing', 'bad-json', 'nonutf8', 'hash', 'run_id', 'execution_id'])
 def test_diagnostics_na_does_not_mask_binding_conflicts(tmp_path, op, settings, partition, change):
     root, _ = _fixture(tmp_path, single_manifest(op, settings), partitions={op.case_id: partition})
@@ -513,8 +548,8 @@ def test_diagnostics_na_does_not_mask_binding_conflicts(tmp_path, op, settings, 
         with pytest.raises(ValueError, match='identity mismatch'):
             load_report(root)
     else:
-        case = load_report(root).cases[0]
-        assert case['worker_status'] is case['agent_seconds'] is case['total_tokens'] is None
+        with pytest.raises(ValueError, match='assessment/canonical'):
+            load_report(root)
 
 
 @pytest.mark.parametrize('torn', [False, True])
@@ -551,14 +586,16 @@ def test_metrics_and_record_invariants(tmp_path, op, settings, change):
     elif change == 'class':
         evaluation['metrics']['classes'][op.vulnerability_class]['FN'] += 1
     elif change in {'partition', 'started', 'completed'}:
-        key = 'unresolved' if change == 'partition' else change
-        overall[key] += 1
+        if change == 'partition':
+            overall['assessment_status_counts']['unresolved'] += 1
+        else:
+            overall[change] += 1
     elif change == 'rate':
         overall['recall'] = .5
     elif change == 'zero-denominator':
         overall['fpr'] = 0
     elif change == 'truth':
-        evaluation['records'][0]['confusion'] = 'TN'
+        evaluation['records'][0]['assessment_confusion'] = 'TN'
     else:
         rows, _ = read_records(root / 'events.jsonl')
         next(e for e in rows if e['kind'] == 'runtime-finished')['data']['canonical_summary']['outcome'] = 'not-confirmed'
@@ -568,14 +605,14 @@ def test_metrics_and_record_invariants(tmp_path, op, settings, change):
         load_report(root)
 
 
-def test_missing_outcome_is_not_inferred(tmp_path, op, settings):
+def test_outcome_comes_from_canonical_export_without_parent_summary(tmp_path, op, settings):
     root, _ = _fixture(tmp_path, single_manifest(op, settings))
     rows, _ = read_records(root / 'events.jsonl')
     del next(e for e in rows if e['kind'] == 'runtime-finished')['data']['canonical_summary']
     _save_rows(root, rows)
     _rebind(root)
     case = load_report(root).cases[0]
-    assert case['agent_outcome'] is None and case['confusion'] == 'TP'
+    assert case['assessment_outcome'] == 'confirmed' and case['assessment_confusion'] == 'TP'
 
 
 @pytest.mark.parametrize('field,bad,missing', [
@@ -588,7 +625,7 @@ def test_missing_outcome_is_not_inferred(tmp_path, op, settings):
     ('total_tokens', {'complete': False, 'total': 19, 'observed_sum': 19}, ('total_tokens',)),
 ])
 def test_malformed_nested_diagnostics_become_na(tmp_path, op, settings, field, bad, missing, capsys):
-    root, _ = _fixture(tmp_path, single_manifest(op, settings), partitions={op.case_id: 'invalid-result'})
+    root, _ = _fixture(tmp_path, single_manifest(op, settings), partitions={op.case_id: 'invalid'})
     path = root / 'results' / f'{op.case_id}.json'
     raw = json.loads(path.read_text())
     if field in {'llm', 'tools'}:
@@ -617,15 +654,13 @@ def test_opaque_credentials_fixture_aliases_and_metadata_projection(tmp_path, op
         dataset={'version': secret, 'git_commit': secret, 'artifacts': {'truth.csv': 'a' * 64}},
         reproducibility={'kagent_commit': secret, 'python': secret, 'capability_profile': secret,
                          'arbitrary': {'password': secret}})
-    root, evaluation = _fixture(tmp_path, manifest, partitions={operation.case_id: 'invalid-result'})
+    root, evaluation = _fixture(tmp_path, manifest, partitions={operation.case_id: 'invalid'})
     path = next(root.glob('evaluation-*.json'))
-    evaluation['records'][0]['reason'] = secret
     path.write_text(json.dumps(evaluation))
     rows, _ = read_records(root / 'events.jsonl')
     finish = next(e for e in rows if e['kind'] == 'runtime-finished')
     finish['data']['runtime_metadata'] = {'provider': secret, 'model': 'sk-' + secret,
                                           'raw_message': secret, 'base_url': settings.target}
-    next(e for e in rows if e['kind'] == 'evaluated')['data']['reason'] = secret
     _save_rows(root, rows)
     _rebind(root)
     destination = write_report(root)
@@ -652,9 +687,10 @@ def test_semantic_metadata_positive_and_fixture_alias_filter(tmp_path, op, setti
     assert metadata['reproducibility']['python'] == '3.11.9'
     raw = json.loads((root / 'manifest.json').read_text())
     raw['operational'][0]['headers']['X-Api-Key'] = '1.2'
-    (root / 'manifest.json').write_text(json.dumps(raw))
-    _rebind(root)
-    assert load_report(root).metadata['dataset']['version'] is None
+    alias = tmp_path / 'alias'
+    alias.mkdir()
+    other, _ = _fixture(alias, decode(RunManifest, raw))
+    assert load_report(other).metadata['dataset']['version'] is None
 
 
 @pytest.mark.parametrize('bad', ['http://[alice:Orbit987654321]', 'http://alice:Orbit987654321@host',
@@ -955,18 +991,18 @@ def test_concurrent_parent_substitution_is_detected(tmp_path, op, settings, monk
     assert not (parent / 'report').exists()
 
 
-@pytest.mark.parametrize('counts', [(37, 1, 1, 1, 0), (0, 0, 0, 0, 0), (1, 999, 0, 0, 0)])
+@pytest.mark.parametrize('counts', [(37, 1, 1, 1), (0, 0, 0, 0), (1, 999, 0, 0)])
 def test_partition_chart_counts_patterns_and_geometry(counts):
     from benchmarks.scenario1.reporting.charts import evaluation_partitions
     from benchmarks.scenario1.reporting.model import ReportModel
-    group = {'scheduled': sum(counts), **dict(zip(PARTITIONS, counts))}
+    group = {'scheduled': sum(counts), 'assessment_status_counts': dict(zip(ASSESSMENT_STATUSES, counts))}
     model = ReportModel({'classification': 'development', 'classification_qualifier': 'smoke'},
                         {'classes': {cls: group for cls in CLASSES}}, ())
     tree = ET.fromstring(evaluation_partitions(model))
     namespace = {'s': 'http://www.w3.org/2000/svg'}
     for cls in CLASSES:
         cells = [t for t in tree.findall('s:text', namespace) if t.get('data-class') == cls]
-        assert [cell.get('data-partition') for cell in cells] == list(PARTITIONS)
+        assert [cell.get('data-partition') for cell in cells] == list(ASSESSMENT_STATUSES)
         assert [int(cell.text or '') for cell in cells] == list(counts)
         rects = [r for r in tree.findall('s:rect', namespace) if r.get('data-class') == cls]
         assert sum(int(r.attrib['data-count']) for r in rects) == group['scheduled']
@@ -979,29 +1015,33 @@ def test_partition_chart_counts_patterns_and_geometry(counts):
             assert all(float(t.attrib['y']) > float(rect.attrib['y']) + 30 for t in cells)
         assert all(24 <= float(t.attrib['x']) < 920 and 0 < float(t.attrib['y']) < 450 for t in cells)
     patterns = tree.findall('s:defs/s:pattern', namespace)
-    assert len(patterns) == len(PARTITIONS)
+    assert len(patterns) == len(ASSESSMENT_STATUSES)
     marks = [p.find('s:g', namespace) for p in patterns]
     assert all(mark is not None for mark in marks)
-    assert len({ET.tostring(mark) for mark in marks if mark is not None}) == len(PARTITIONS)
+    assert len({ET.tostring(mark) for mark in marks if mark is not None}) == len(ASSESSMENT_STATUSES)
     text = ' '.join(t.text or '' for t in tree.findall('s:text', namespace))
-    assert all(label in text for label in ('Đánh giá được', 'Chưa có kết luận', 'Lỗi thực thi',
-                                         'Kết quả không hợp lệ', 'Chưa chạy'))
+    assert all(label in text for label in ('Đã chấp nhận', 'Chưa có kết luận', 'Không hợp lệ', 'Không có kết quả'))
     assert 'Development / smoke' in text and 'N scheduled' in text
-    assert 'sum to N scheduled' in text and 'không được tính vào TN/FN' in text
+    assert 'sum to N scheduled' in text and 'do not contribute to TP/TN/FP/FN' in text
     style = tree.find('s:style', namespace)
     assert style is not None and 'fill:#171717' in (style.text or '')
 
 
-def test_reporting_fresh_process_imports_no_execution_runtime(tmp_path, op, settings):
+def test_reporting_fresh_process_never_starts_execution(tmp_path, op, settings):
     import subprocess
     import sys
     root, _ = _fixture(tmp_path, single_manifest(op, settings))
     code = '''
 import sys
+import socket
+from benchmarks.scenario1.core import runtime
+def forbidden(*args, **kwargs):
+    raise AssertionError('reporting must not start a worker, Agent or network request')
+runtime.build_agent = runtime.execute_case = forbidden
+socket.create_connection = socket.socket.connect = forbidden
 from benchmarks.scenario1.__main__ import main
 assert main(['report', '--run', sys.argv[1]]) == 0
-prefixes = ('src.agent', 'src.config', 'src.llm', 'src.report', 'benchmarks.scenario1.core.runtime',
-            'benchmarks.scenario1.core.runner', 'benchmarks.scenario1.core.worker', 'benchmarks.scenario1.core.evaluate')
+prefixes = ('benchmarks.scenario1.core.runner', 'benchmarks.scenario1.core.worker', 'benchmarks.scenario1.core.evaluate')
 assert not [m for m in sys.modules if m.startswith(prefixes)]
 '''
     completed = subprocess.run([sys.executable, '-B', '-c', code, str(root)], capture_output=True, text=True)
@@ -1056,17 +1096,21 @@ def test_csv_quotes_utf8_and_deterministic_order():
 
 
 def test_exported_case_strings_cannot_start_csv_formulas(tmp_path, op, settings):
-    root, _ = _fixture(tmp_path, single_manifest(op, settings), partitions={op.case_id: 'invalid-result'})
+    root, _ = _fixture(tmp_path, single_manifest(op, settings), partitions={op.case_id: 'invalid'})
     evaluation = json.loads(next(root.glob('evaluation-*.json')).read_text())
-    evaluation['records'][0]['reason'] = '=HYPERLINK("opaque")'
+    evaluation['records'][0]['assessment_reason'] = '=HYPERLINK("opaque")'
     next(root.glob('evaluation-*.json')).write_text(json.dumps(evaluation))
     rows, _ = read_records(root / 'events.jsonl')
-    next(e for e in rows if e['kind'] == 'evaluated')['data']['reason'] = evaluation['records'][0]['reason']
+    next(e for e in rows if e['kind'] == 'evaluated')['data']['assessment_reason'] = evaluation['records'][0]['assessment_reason']
     _save_rows(root, rows)
+    with pytest.raises(ValueError, match='assessment/canonical'):
+        load_report(root)
+    _rebind(root)
     model = load_report(root)
     for row in _csv(render_tables(model)['per-case.csv']):
         assert all(not value.startswith(('=', '+', '-', '@', '\t', '\r')) for value in row.values())
-    assert model.cases[0]['evaluator_reason'] == '[redacted]'
+    from benchmarks.scenario1.reporting.loader import _safe_reason
+    assert _safe_reason('=HYPERLINK("opaque")') == '[redacted]'
 
 
 def test_commit_shaped_opaque_credentials_are_pseudonymized(tmp_path, op, settings):
@@ -1105,14 +1149,13 @@ def test_staging_substitution_preserves_other_owner(tmp_path, op, settings, monk
 
 
 @pytest.mark.parametrize('outcome', ['blocked', 'browser-required', 'opaque', [1]])
-def test_evaluable_records_reject_unscorable_supplied_outcomes(tmp_path, op, settings, outcome):
+def test_parent_summary_cannot_override_canonical_assessment(tmp_path, op, settings, outcome):
     root, _ = _fixture(tmp_path, single_manifest(op, settings))
     rows, _ = read_records(root / 'events.jsonl')
     next(e for e in rows if e['kind'] == 'runtime-finished')['data']['canonical_summary']['outcome'] = outcome
     _save_rows(root, rows)
     _rebind(root)
-    with pytest.raises(ValueError, match='provided outcome'):
-        load_report(root)
+    assert load_report(root).cases[0]['assessment_outcome'] == 'confirmed'  # Summary/log prose is not authority.
 
 
 def test_semantic_manifest_binding_allows_legacy_byte_format_changes(tmp_path, op, settings):
@@ -1127,7 +1170,7 @@ def test_semantic_manifest_binding_allows_legacy_byte_format_changes(tmp_path, o
     assert model.metadata['manifest_sha256'] == file_hash(path)
 
 
-def test_partial_tail_contents_remain_ignored_by_v1_identity(tmp_path, op, settings):
+def test_partial_tail_contents_remain_ignored_by_v2_identity(tmp_path, op, settings):
     root, evaluation = _evaluated_run(tmp_path, op, settings, finish=False, partial=True)
     path = root / 'events.jsonl'
     complete = path.read_bytes().rsplit(b'\n', 1)[0] + b'\n'
@@ -1140,7 +1183,8 @@ SVG_NS = {'s': 'http://www.w3.org/2000/svg'}
 
 def _chart_model(cases):
     from benchmarks.scenario1.reporting.model import ReportModel
-    records = [{'partition': 'evaluable', 'confusion': 'TP'} for _ in cases]
+    records = [{'execution_status': 'completed', 'assessment_status': 'accepted',
+                'assessment_reason': 'accepted-agent-assessment', 'assessment_confusion': 'TP'} for _ in cases]
     return ReportModel({'classification': 'development', 'classification_qualifier': 'smoke'},
         {'overall': _group(records), 'classes': {cls: _group([
             r for r, c in zip(records, cases) if c['vulnerability_class'] == cls]) for cls in CLASSES}}, tuple(cases))
@@ -1265,7 +1309,7 @@ def test_chart_visual_language_metric_casing_and_class_colors():
         assert any(t.text == 'Development / smoke' and t.get('y') == '72' for t in texts)
         assert all(0 < float(t.attrib['x']) < 920 and 0 < float(t.attrib['y']) < int(tree.attrib['height']) for t in texts)
         text = _svg_text(contents)
-        assert not any(field in text for field in ('evaluator_partition', 'agent_seconds', 'http_dispatch_attempts',
+        assert not any(field in text for field in ('assessment_status', 'agent_seconds', 'http_dispatch_attempts',
                                                  'total_tokens_complete', 'tool_result_events', 'Fpr'))
     assert len(set(styles)) == 1
     assert 'Arial,sans-serif' in styles[0]
@@ -1306,7 +1350,7 @@ def test_case_chart_empty_zero_and_large_values_keep_finite_geometry(seconds, to
 def test_confusion_matrix_preserves_truth_rows_assessment_columns_and_counts():
     from benchmarks.scenario1.reporting.charts import confusion_matrix
     model = _chart_model([])
-    model.metrics['overall'].update(TP=3, FN=1, FP=2, TN=4, evaluable=10, scheduled=12)
+    model.metrics['overall'].update(TP=3, FN=1, FP=2, TN=4, assessment_accepted=10, scheduled=12)
     tree = ET.fromstring(confusion_matrix(model))
     labels = {t.text: t for t in tree.findall('s:text', SVG_NS) if t.text in ('TP', 'FN', 'FP', 'TN')}
     assert labels['TP'].get('x') == labels['FP'].get('x')
@@ -1325,31 +1369,32 @@ def test_confusion_matrix_preserves_truth_rows_assessment_columns_and_counts():
 def test_class_metrics_bar_lengths_and_displayed_fractions_use_canonical_rates():
     from benchmarks.scenario1.reporting.charts import class_metrics
     model = _chart_model([])
-    group = {'TP': 3, 'FN': 1, 'FP': 2, 'TN': 4, 'evaluable': 10, 'scheduled': 12,
-             'recall': .75, 'precision': .6, 'fpr': 2 / 6, 'evaluability': 10 / 12}
+    group = {'TP': 3, 'FN': 1, 'FP': 2, 'TN': 4, 'assessment_accepted': 10, 'scheduled': 12, 'completed': 10,
+             'recall': .75, 'precision': .6, 'fpr': 2 / 6, 'assessment_coverage': 10 / 12}
     model.metrics['classes'] = {cls: group.copy() for cls in CLASSES}
     data = class_metrics(model)
     tree = ET.fromstring(data)
     filled = [r for r in tree.findall('s:rect', SVG_NS) if r.get('x') == '190' and r.get('fill') != '#f1f3f5']
-    assert [float(r.attrib['width']) for r in filled] == pytest.approx([470 * r for r in (.75, .6, 2 / 6, 10 / 12)] * 2, abs=.001)
+    assert [float(r.attrib['width']) for r in filled] == pytest.approx([470 * r for r in (.75, .6, 2 / 6)] * 2, abs=.001)
     text = _svg_text(data)
-    assert all(text.count(fraction) == 2 for fraction in ('75.0% (3/4)', '60.0% (3/5)', '33.3% (2/6)', '83.3% (10/12)'))
+    assert all(text.count(fraction) == 2 for fraction in ('75.0% (3/4)', '60.0% (3/5)', '33.3% (2/6)'))
 
 
 def _thesis_case(index, **changes):
     from benchmarks.scenario1.reporting.tables import CASE_FIELDS
     case: dict[str, Any] = {field: None for field in CASE_FIELDS}
-    case.update(_chart_case(index), expected_vulnerable=True, agent_outcome='confirmed',
-                evaluator_partition='evaluable', evaluator_reason='accepted-agent-assessment',
-                confusion='TP', worker_status='completed', llm_calls=2, tool_executed=3,
+    case.update(_chart_case(index), expected_vulnerable=True, execution_status='completed', assessment_outcome='confirmed',
+                assessment_status='accepted', assessment_reason='accepted-agent-assessment',
+                assessment_confusion='TP', worker_status='completed', llm_calls=2, tool_executed=3,
                 http_dispatch_attempts=4, http_admitted=999)
     case.update(changes)
+    case['execution_status'] = case['final_status'] or 'not-run'
     return case
 
 
 def _thesis_model(cases):
     model = _chart_model(cases)
-    records = [{'partition': c['evaluator_partition'], 'confusion': c['confusion']} for c in cases]
+    records = [dict(c, execution_status=c.get('final_status') or 'not-run') for c in cases]
     model.metrics['overall'] = _group(records)
     model.metrics['classes'] = {cls: _group([r for r, c in zip(records, cases)
         if c['vulnerability_class'] == cls]) for cls in CLASSES}
@@ -1358,8 +1403,13 @@ def _thesis_model(cases):
 
 def _md_rows(contents, panel):
     section = contents.decode().split(f'## {panel} — ', 1)[1].split('\n## ', 1)[0]
-    return [[cell.strip() for cell in line.strip('|').split('|')]
-            for line in section.splitlines() if line.startswith('|')][2:]
+    table = []
+    for line in section.splitlines():
+        if line.startswith('|'):
+            table.append([cell.strip() for cell in line.strip('|').split('|')])
+        elif table:
+            break
+    return table[2:]
 
 
 def _thesis_values(contents):
@@ -1371,38 +1421,38 @@ def _thesis_values(contents):
 def test_thesis_quality_canonical_fractions_geometry_and_zero_denominator():
     model = _thesis_model([])
     model.metrics['classes'][CLASSES[0]] = {'TP': 3, 'FN': 1, 'FP': 2, 'TN': 4,
-        'evaluable': 10, 'scheduled': 12, 'recall': .75, 'precision': .6,
+        'assessment_accepted': 10, 'completed': 10, 'scheduled': 12, 'recall': .75, 'precision': .6,
         'fpr': 2 / 6, 'evaluability': 10 / 12}
     data = render_thesis_charts(model)['charts/scenario1-validation-quality.svg']
     tree = ET.fromstring(data)
     groups = tree.findall('s:g', SVG_NS)
     assert [(g.get('data-class'), g.get('data-metric')) for g in groups] == [
-        (cls, rate) for cls in CLASSES for rate in ('recall', 'precision', 'fpr', 'evaluability')]
+        (cls, rate) for cls in CLASSES for rate in ('recall', 'precision', 'fpr')]
     widths = [float(r.attrib['width']) for r in tree.findall('.//s:rect[@class="filled"]', SVG_NS)]
-    assert widths == pytest.approx([295 * r for r in (.75, .6, 2 / 6, 10 / 12)], abs=.001)
-    assert len(tree.findall('.//s:rect[@class="track"]', SVG_NS)) == 8
+    assert widths == pytest.approx([295 * r for r in (.75, .6, 2 / 6)], abs=.001)
+    assert len(tree.findall('.//s:rect[@class="track"]', SVG_NS)) == 6
     text = _svg_text(data)
-    assert all(label in text for label in ('75,0% (3/4)', '60,0% (3/5)', '33,3% (2/6)', '83,3% (10/12)'))
-    assert text.count('NA (0/0)') == 4
-    zero = _thesis_model([_thesis_case(0, confusion='TN', expected_vulnerable=False)])
+    assert all(label in text for label in ('75,0% (3/4)', '60,0% (3/5)', '33,3% (2/6)'))
+    assert text.count('NA (0/0)') == 3
+    zero = _thesis_model([_thesis_case(0, assessment_confusion='TN', expected_vulnerable=False)])
     text = _svg_text(render_thesis_charts(zero)['charts/scenario1-validation-quality.svg'])
     assert '0,0% (0/1)' in text and 'NA (0/0)' in text
-    assert all(text.count(label) == 2 for label in ('Recall', 'Precision', 'FPR', 'Tỷ lệ đánh giá được'))
+    assert all(text.count(label) == 2 for label in ('Recall', 'Precision', 'FPR'))
     assert 'Evaluability' not in text and 'Có kết quả' not in text
     compatibility = _svg_text(render_charts(zero)['charts/class-metrics.svg'])
-    assert compatibility.count('Tỷ lệ đánh giá được') == 3  # Subtitle and the two class labels.
+    assert 'Tỷ lệ đánh giá được' not in compatibility
 
 
 def test_thesis_parent_completed_cohort_includes_unresolved_invalid_and_retains_failures():
     cases = [_thesis_case(0, agent_seconds=10, total_tokens=1000),
              _thesis_case(2, agent_seconds=20, total_tokens=2000,
-                          evaluator_partition='unresolved', confusion=None),
+                          assessment_status='unresolved', assessment_confusion=None),
              _thesis_case(4, agent_seconds=30, total_tokens=3000,
-                          evaluator_partition='invalid-result', confusion=None),
+                          assessment_status='invalid', assessment_confusion=None),
              _thesis_case(6, final_status='budget-exhausted', agent_seconds=1000,
-                          total_tokens=8000, evaluator_partition='execution-failed', confusion=None),
+                          total_tokens=8000, assessment_status='unavailable', assessment_confusion=None),
              _thesis_case(1, final_status='crashed', agent_seconds=0, total_tokens=0,
-                          evaluator_partition='execution-failed', confusion=None)]
+                          assessment_status='unavailable', assessment_confusion=None)]
     model = _thesis_model(cases)
     charts = render_thesis_charts(model)
     assert _thesis_values(charts[f'charts/{FIGURE_NAMES[1]}.svg']) == ['20,0', 'NA']
@@ -1475,22 +1525,19 @@ def test_thesis_noncompleted_status_groups_have_independent_availability():
 
 
 def test_thesis_notes_distinguish_unscored_cases_na_and_metric_denominators():
-    cases = [_thesis_case(i * 2, evaluator_partition=part,
-                         confusion='TP' if part == 'evaluable' else None,
-                         final_status=None if part == 'not-run' else 'completed')
-             for i, part in enumerate(PARTITIONS)]
+    cases = [_thesis_case(i * 2, assessment_status=status,
+                         assessment_confusion='TP' if status == 'accepted' else None,
+                         final_status=None if status == 'unavailable' else 'completed')
+             for i, status in enumerate(ASSESSMENT_STATUSES)]
     data = render_thesis_tables(_thesis_model(cases))
     md = data.decode()
-    assert _md_rows(data, 'T1A')[0][1:] == ['5', '1', '1', '1', '1', '1']
-    assert _md_rows(data, 'T1B')[0][1:] == ['1', '0', '0', '0']
-    assert all(label in md for label in ('Evaluable', 'Unresolved', 'Execution failed',
-                                        'Invalid result', 'Not run'))
-    assert 'Bốn nhóm sau không đủ điều kiện đưa vào TP/TN/FP/FN' in md
-    assert 'Kết luận hợp lệ “không xác nhận lỗ hổng” khác với “chưa có kết luận”' in md
+    assert _md_rows(data, 'T1A')[0][1:] == ['4', '3', '75,0%']
+    assert _md_rows(data, 'T1B')[0][1:] == ['1', '1', '1', '1', '25,0%']
+    assert _md_rows(data, 'T1C')[0][1:] == ['1', '0', '0', '0']
+    assert all(label in md for label in ('Unresolved', 'Invalid', 'Unavailable'))
     assert all(formula in md for formula in ('Recall = TP/(TP+FN)', 'Precision = TP/(TP+FP)',
-                                           'FPR = FP/(FP+TN)'))
-    assert 'Tỷ lệ đánh giá được (Evaluability) = số case đánh giá được / tổng case đã lên lịch' in md
-    assert 'mức bao phủ, không phải độ đúng' in md
+                                           'FPR = FP/(FP+TN)', 'Completion Rate', 'Assessment Coverage'))
+    assert 'không phải kết luận âm' in md and 'mức bao phủ, không phải độ đúng' in md
     assert 'n case có số đo hợp lệ, N case hoàn tất' in md
     assert 'n case có số đo hợp lệ, N case đã lên lịch' in md
     assert all(reason in md for reason in ('mẫu số bằng 0', 'không có số đo hợp lệ',
@@ -1498,14 +1545,13 @@ def test_thesis_notes_distinguish_unscored_cases_na_and_metric_denominators():
                                           'Tổng token chưa được ghi nhận đầy đủ'))
     assert '1 = 1.000 token' in md and 'Đơn vị giây' in md
     assert 'không phải thời gian toàn bộ benchmark' in md
-    assert '4/5 case hoàn tất / đã lên lịch; 4/4 case có số đo hợp lệ / hoàn tất' in md
-    assert 'không khả dụng' not in md
+    assert '3/4 case hoàn tất / đã lên lịch; 3/3 case có số đo hợp lệ / hoàn tất' in md
 
 
 def test_thesis_resource_limit_provider_failure_and_crash_remain_separate():
     statuses = ('budget-exhausted', 'provider-error', 'crashed', 'runtime-error')
-    cases = [_thesis_case(i * 2, final_status=status, evaluator_partition='execution-failed',
-                         confusion=None, agent_seconds=i + 1, total_tokens=(i + 1) * 1000)
+    cases = [_thesis_case(i * 2, final_status=status, assessment_status='unavailable',
+                         assessment_confusion=None, agent_seconds=i + 1, total_tokens=(i + 1) * 1000)
              for i, status in enumerate(statuses)]
     md = render_thesis_tables(_thesis_model(cases))
     rows = _md_rows(md, 'T2C')
@@ -1517,17 +1563,16 @@ def test_thesis_resource_limit_provider_failure_and_crash_remain_separate():
 
 
 def test_thesis_missing_final_status_ledger_preserves_partitions_and_source():
-    cases = [_thesis_case(0, final_status=None, evaluator_partition='execution-failed', confusion=None,
+    cases = [_thesis_case(0, final_status=None, assessment_status='unavailable', assessment_confusion=None,
                           agent_seconds=None, total_tokens=None),
-             _thesis_case(2, final_status=None, evaluator_partition='not-run', confusion=None,
+             _thesis_case(2, final_status=None, assessment_status='unavailable', assessment_confusion=None,
                           agent_seconds=None, total_tokens=None)]
     model = _thesis_model(cases)
     before = json.dumps(model.cases, sort_keys=True)
     md = render_thesis_tables(model)
-    assert _md_rows(md, 'T1A')[0] == ['SQLi', '2', '0', '0', '1', '0', '1']
+    assert _md_rows(md, 'T1A')[0] == ['SQLi', '2', '0', '0,0%']
     assert _md_rows(md, 'Ledger') == [
-        ['SQLi', 'Lỗi thực thi', '1', 'NA<br>0/1', 'NA<br>0/1'],
-        ['SQLi', 'Chưa chạy', '1', 'NA<br>0/1', 'NA<br>0/1']]
+        ['SQLi', 'Không có kết quả', '2', 'NA<br>0/2', 'NA<br>0/2']]
     assert _md_rows(md, 'T2A')[0][1] == '0/0'
     assert _md_rows(md, 'T3')[0][1] == 'NA<br>0/2'
     assert '## T2C' not in md.decode() and 'Case thiếu trạng thái kết thúc xem Ledger.' in md.decode()
@@ -1540,7 +1585,7 @@ def test_thesis_no_finish_and_not_run_bound_loader_integration(tmp_path, op, set
     root, _ = _evaluated_run(tmp_path, op, settings, started=started, finish=False, result=started)
     model = load_report(root)
     md = render_thesis_tables(model)
-    partition_label = 'Lỗi thực thi' if started else 'Chưa chạy'
+    partition_label = 'Không có kết quả'
     assert _md_rows(md, 'Ledger')[0][1:3] == [partition_label, '1']
     assert model.cases[0]['final_status'] is None
     assert model.cases[0]['agent_seconds'] is None  # Unbound orphan cannot supply resources.
@@ -1622,8 +1667,8 @@ def test_thesis_visible_text_physical_size_typography_and_colors():
 def test_thesis_large_schedule_accounting_determinism_and_csv_preservation(count):
     from benchmarks.scenario1.reporting.tables import CASE_FIELDS, csv_bytes
     cases = [_thesis_case(i, agent_seconds=i + 1, total_tokens=(i + 1) * 1000,
-                          evaluator_partition=PARTITIONS[i % 5],
-                          confusion='TP' if i % 5 == 0 else None,
+                          assessment_status=ASSESSMENT_STATUSES[i % 4],
+                          assessment_confusion='TP' if i % 4 == 0 else None,
                           final_status='completed' if i % 5 < 3 else 'timeout' if i % 5 == 3 else None)
              for i in range(count)]
     model = _thesis_model(cases)
@@ -1633,16 +1678,18 @@ def test_thesis_large_schedule_accounting_determinism_and_csv_preservation(count
     assert files['per-case.csv'] == csv_bytes(CASE_FIELDS, cases)
     assert list(_csv(files['per-case.csv'])[0]) == list(CASE_FIELDS)
     assert _csv(files['summary.csv']) == [{k: '' if v is None else str(v) for k, v in r.items()} for r in summary_rows(model)]
-    assert _csv(files['partitions.csv']) == [{k: str(v) for k, v in r.items()} for r in partition_rows(model)]
-    expected_abnormal = [{'case_id': c['case_id'], 'partition': c['evaluator_partition'],
-                         'reason': c['evaluator_reason'], 'manual_root_cause': ''}
-                        for c in cases if c['evaluator_partition'] != 'evaluable']
+    for filename, key in (('execution.csv', 'execution_status_counts'), ('assessments.csv', 'assessment_status_counts')):
+        rows = _csv(files[filename])
+        assert sum(int(r['count']) for r in rows if r['class'] == 'Overall') == count
+    expected_abnormal = [{'case_id': c['case_id'], 'execution_status': c['execution_status'],
+                         'assessment_status': c['assessment_status'], 'reason': c['assessment_reason'],
+                         'manual_root_cause': ''}
+                        for c in cases if c['assessment_status'] != 'accepted' or c['execution_status'] != 'completed']
     assert _csv(files['abnormal-analysis-template.csv']) == expected_abnormal
     md = files['thesis-tables.md']
-    for row in _md_rows(md, 'T1A'):
-        assert sum(map(int, row[2:])) == int(row[1])
-    assert _md_rows(md, 'T1A')[2][1:] == [str(count), *[str(count // 5)] * 5]
-    assert _md_rows(md, 'T1B')[2][1:] == [str(count // 5), '0', '0', '0']
+    assert _md_rows(md, 'T1A')[2][1:] == [str(count), str(count * 3 // 5), '60,0%']
+    assert _md_rows(md, 'T1B')[2][1:] == [str(count // 4)] * 4 + ['25,0%']
+    assert _md_rows(md, 'T1C')[2][1:] == [str(count // 4), '0', '0', '0']
     assert int(_md_rows(md, 'T2A')[2][1].split('/')[1]) + sum(int(r[1]) for r in _md_rows(md, 'T2C')) + sum(int(r[2]) for r in _md_rows(md, 'Ledger')) == count
     assert _md_rows(md, 'T3')[2][1:] == [f'{count * (count + 1) // 2 * 1000:,}'.replace(',', '.') + f'<br>{count}/{count}',
                                        f'{count * 2}<br>{count}/{count}', f'{count * 3}<br>{count}/{count}', f'{count * 4}<br>{count}/{count}']
@@ -1654,7 +1701,7 @@ def test_thesis_writer_new_inventory_and_repeatable_bytes(tmp_path, op, settings
     first = write_report(root)
     inventory = json.loads((first / 'report.json').read_text())['output_files']
     assert inventory == sorted(str(p.relative_to(first)) for p in first.rglob('*') if p.is_file())
-    assert len(inventory) == 14 and 'thesis-tables.md' in inventory
+    assert len(inventory) == 15 and 'thesis-tables.md' in inventory
     assert all(f'charts/{name}.svg' in inventory for name in FIGURE_NAMES)
     second = write_report(root, root / 'thesis-again')
     assert all((first / name).read_bytes() == (second / name).read_bytes() for name in inventory)

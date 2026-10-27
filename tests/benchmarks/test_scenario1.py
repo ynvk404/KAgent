@@ -487,16 +487,15 @@ async def test_real_agent_native_assessment(tmp_path, monkeypatch, op, settings,
     assert execution.runtime_metadata['yolo'] is False
     recorded_run(tmp_path / 'recorded', single_manifest(op, settings), execution)
     report = evaluate(tmp_path / 'recorded')
-    assert report['records'][0]['partition'] == ('execution-failed' if outcome == 'confirmed'
-        else 'evaluable' if outcome == 'not-confirmed' else 'unresolved')
+    assert report['records'][0]['assessment_status'] == ('accepted' if outcome in {'confirmed', 'not-confirmed'} else 'unresolved')
     if outcome == 'not-confirmed':
         assert report['metrics']['overall']['FN'] == 1
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(('name_case', 'partition'), [
-    ('replacement', 'evaluable'),
-    ('unrelated', 'invalid-result'),
+    ('replacement', 'accepted'),
+    ('unrelated', 'invalid'),
 ])
 async def test_name_component_requires_recorded_baseline_replacement(
         tmp_path, monkeypatch, settings, mock_http, name_case, partition):
@@ -511,9 +510,9 @@ async def test_name_component_requires_recorded_baseline_replacement(
     root = tmp_path / f'run-{name_case}'
     recorded_run(root, single_manifest(op_name, settings), execution)
     report = evaluate(root)
-    assert report['records'][0]['partition'] == partition
+    assert report['records'][0]['assessment_status'] == partition
     if name_case == 'unrelated':
-        assert report['records'][0]['reason'] == 'evidence-case-binding:missing-name-mutation-semantics'
+        assert report['records'][0]['assessment_reason'] == 'evidence-case-binding:missing-name-mutation-semantics'
     else:
         result = execution.result['workflow']['validation_results'][-1]
         bindings = [entry['source']['source_details']['scenario1_case_binding']
@@ -536,7 +535,10 @@ async def test_execution_failures_never_negative(tmp_path, monkeypatch, op, sett
         assert ex.result['result_id'] is None and ex.stop_reason == 'max_steps'
     recorded_run(tmp_path / 'recorded', single_manifest(op, settings), ex)
     report = evaluate(tmp_path / 'recorded')
-    assert report['records'][0]['partition'] == 'execution-failed'
+    record = report['records'][0]
+    assert record['execution_status'] == status
+    assert record['assessment_status'] == ('accepted' if mode == 'late-error' else 'invalid' if mode == 'timeout' else 'unavailable')
+    assert record['assessment_confusion'] == ('TP' if mode == 'late-error' else None)
 
 
 @pytest.mark.asyncio
@@ -660,11 +662,11 @@ def test_interrupted_parent_preserves_orphan_export_without_scoring(tmp_path, op
     history, contents = (root / 'events.jsonl').read_bytes(), output.read_bytes()
     report = evaluate(root)
     assert report['incomplete'] and report['partial_tail_ignored'] == partial_tail
-    assert report['records'][0]['partition'] == 'execution-failed'
-    assert report['records'][0]['reason'] == 'interrupted-after-start'
+    assert report['records'][0]['assessment_status'] == 'unavailable'
+    assert report['records'][0]['assessment_reason'] == 'missing-parent-receipt'
     counts = report['metrics']['overall']
-    assert counts['scheduled'] == counts['started'] == counts['execution-failed'] == 1
-    assert counts['completed'] == counts['evaluable'] == 0 and counts['evaluability'] == 0
+    assert counts['scheduled'] == counts['started'] == counts['execution_failed'] == 1
+    assert counts['completed'] == counts['assessment_accepted'] == 0 and counts['assessment_coverage'] == 0
     assert all(counts[k] == 0 for k in ('TP', 'FN', 'FP', 'TN'))
     assert counts['agent_seconds_by_status'] == {}
     assert report['orphan_exports'] == [{'case_id': op.case_id, 'execution_id': 'ex',
@@ -751,8 +753,8 @@ def test_orphan_recovery_preserves_completed_cases_and_whole_schedule(tmp_path, 
     report = evaluate(root)
     counts = report['metrics']['overall']
     assert counts['scheduled'] == 40 and counts['started'] == 2 and counts['completed'] == 1
-    assert counts['unresolved'] == counts['execution-failed'] == 1 and counts['not-run'] == 38
-    assert counts['evaluable'] == 0 and counts['evaluability'] == 0
+    assert counts['assessment_status_counts']['unavailable'] == 40 and counts['execution_failed'] == 1 and counts['not_run'] == 38
+    assert counts['assessment_accepted'] == 0 and counts['assessment_coverage'] == 0
     assert counts['agent_seconds_by_status'] == {'completed': distribution([1])}
     assert (root / 'events.jsonl').read_bytes() == history
 
@@ -783,8 +785,9 @@ async def test_parent_final_status_controls_timing_after_terminal_export(tmp_pat
                   report['metrics']['strata'][f'{op.vulnerability_class}/vulnerable']]
         for group in groups:
             assert group['agent_seconds_by_status'] == {status: distribution([duration])}
-            assert group['completed'] == group['evaluable'] == group['FN'] == (status == 'completed')
-            assert group['execution-failed'] == (status != 'completed')
+            assert group['completed'] == (status == 'completed')
+            assert group['assessment_accepted'] == group['FN'] == 1
+            assert group['execution_failed'] == (status != 'completed')
         assert report['metrics']['strata'][f'{op.vulnerability_class}/safe']['agent_seconds_by_status'] == {}
         assert json.loads(contents)['status'] == 'completed'
         assert output.read_bytes() == contents
@@ -815,11 +818,11 @@ async def test_offline_join_invalid_bindings_and_revisions(tmp_path, monkeypatch
     failure = replace(ex, status='runtime-error')
     recorded_run(tmp_path / 'failure', manifest, failure)
     report = evaluate(tmp_path / 'failure')
-    assert report['metrics']['overall']['execution-failed'] == 1
+    assert report['metrics']['overall']['execution_failed'] == 1
     assert report['metrics']['overall']['TP'] == 0
     no_result = replace(ex, result=None)
     recorded_run(tmp_path / 'missing', manifest, no_result)
-    assert evaluate(tmp_path / 'missing')['records'][0]['reason'] == 'missing-canonical-result'
+    assert evaluate(tmp_path / 'missing')['records'][0]['assessment_reason'] == 'missing-canonical-result'
 
 
 @pytest.mark.asyncio
@@ -891,8 +894,8 @@ async def test_only_exact_case_evidence_is_scoreable(tmp_path, monkeypatch, op, 
     root = tmp_path / f'run-{tamper}'
     recorded_run(root, single_manifest(op, settings), altered_execution)
     report = evaluate(root)
-    assert report['records'][0]['partition'] == 'invalid-result'
-    assert reason in report['records'][0]['reason']
+    assert report['records'][0]['assessment_status'] == 'invalid'
+    assert reason in report['records'][0]['assessment_reason']
 
 
 @pytest.mark.asyncio
@@ -917,16 +920,16 @@ def test_parent_crash_and_partial_accounting(tmp_path, op, settings):
     manifest = single_manifest(op, settings)
     root = run(manifest, settings, tmp_path / 'crash', launcher=lambda *args: (-9, False))
     report = evaluate(root)
-    assert report['records'][0]['partition'] == 'execution-failed'
-    assert report['records'][0]['reason'] == 'crashed'
+    assert report['records'][0]['assessment_status'] == 'unavailable'
+    assert report['records'][0]['assessment_reason'] == 'missing-execution-export'
     partial = tmp_path / 'partial'
     partial.mkdir()
     write_new(partial / 'manifest.json', asdict(manifest))
     rec = Recorder(partial / 'events.jsonl', 'run')
     rec.append('scheduled', op.case_id, 'scheduled', data={'operational_hash': digest(asdict(op)), 'manifest_hash': digest(asdict(manifest))})
     report = evaluate(partial)
-    assert report['incomplete'] and report['metrics']['overall']['not-run'] == 1
-    assert report['metrics']['overall']['evaluability'] == 0
+    assert report['incomplete'] and report['metrics']['overall']['not_run'] == 1
+    assert report['metrics']['overall']['assessment_coverage'] == 0
     assert report['metrics']['overall']['recall'] is None
 
 
@@ -970,8 +973,8 @@ def test_fail_fast_whole_schedule(tmp_path, settings):
     report = evaluate(root)
     counts = report['metrics']['overall']
     assert counts['scheduled'] == 40 and counts['started'] == 1
-    assert counts['execution-failed'] == 1 and counts['not-run'] == 39
-    assert counts['reasons']['fail-fast'] == 39
+    assert counts['execution_failed'] == 1 and counts['not_run'] == 39
+    assert counts['assessment_reasons']['fail-fast'] == 39
     assert evaluate(root) == report
 
 
@@ -1022,7 +1025,7 @@ async def test_offline_corruption_and_duplicate_export(tmp_path, monkeypatch, op
     output = root / 'results' / f'{op.case_id}.json'
     output.write_text('{"damaged":true}')
     report = evaluate(root, publish=False)
-    assert report['records'][0]['partition'] == 'invalid-result' and report['metrics']['overall']['TP'] == 0
+    assert report['records'][0]['assessment_status'] == 'invalid' and report['metrics']['overall']['TP'] == 0
     write_new(root / 'results/duplicate.json', {})
     with pytest.raises(ValueError, match='duplicate'):
         evaluate(root)
@@ -1041,7 +1044,7 @@ def test_unexpected_schedule_and_partial_started(tmp_path, op, settings):
     history = (root / 'events.jsonl').read_bytes()
     report = evaluate(root)
     assert report['incomplete'] and report['partial_tail_ignored']
-    assert report['records'][0]['reason'] == 'interrupted-after-start'
+    assert report['records'][0]['assessment_reason'] == 'missing-parent-receipt'
     assert (root / 'events.jsonl').read_bytes() == history
 
 

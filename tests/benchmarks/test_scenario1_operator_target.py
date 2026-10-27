@@ -226,7 +226,7 @@ def test_operator_runner_preserves_reset_sequence_and_worker_boundary(deployment
     receipts = [json.loads(p.read_text()) for p in (root / 'reset-evidence').glob('*.json')]
     assert {r['phase'] for r in receipts} == {'block', 'identity', 'before', 'authorize', 'after', 'idle'}
     assert all(r['status'] == 'verified' and r['external_effects_restoration_verified'] is False for r in receipts)
-    assert evaluate(root)['metrics']['overall']['execution-failed'] == 1
+    assert evaluate(root)['metrics']['overall']['execution_failed'] == 1
     assert not (root / 'blocked.json').exists()
 
 

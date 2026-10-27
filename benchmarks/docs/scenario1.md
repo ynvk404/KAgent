@@ -212,8 +212,9 @@ Actual DoneEvent mapping:
 | worker setup failure | setup-error |
 | unexpected nonzero worker exit | crashed |
 
-Execution failures take precedence even if an accepted terminal assessment was
-already recorded. The diagnostic export is retained but never scored. Setup
+Execution status and assessment eligibility are independent. A latest accepted terminal
+assessment in a bound canonical export is scored even after timeout, budget exhaustion,
+or provider/runtime failure. The original parent execution status is preserved. Setup
 diagnostics retain exception type and bounded filename/line/function metadata,
 not provider exception messages or unrestricted process logs.
 
@@ -232,7 +233,7 @@ rewrite the entire run and its integrity metadata.
 
 ## Recorder and offline evaluation
 
-Schemas are v1, scenario `scenario1`, protocol `supplied-input-v1`. The parent
+Manifest/runtime/export schemas are v1 (evaluation is v2), scenario `scenario1`, protocol `supplied-input-v1`. The parent
 schedules **every** selected ID before any worker. `events.jsonl` is append-only:
 scheduled -> started -> runtime-finished -> evaluated, with unique record IDs,
 strict contiguous sequence, UTC timestamps, bounded references/status metadata,
@@ -259,19 +260,36 @@ A scheduled case with no start is not-run. Fail-fast preserves scheduled cases
 and records not-run/fail-fast. Evaluations have a deterministic identity/version;
 rerunning evaluation does not append duplicate evaluated events or double-count.
 
-Only completed execution with valid external truth and the latest accepted
-Agent-provenance `confirmed` or `not-confirmed` result is evaluable:
+Evaluation v2 has exactly one record per scheduled case: `execution_status`,
+`assessment_status`, `assessment_reason`, `assessment_outcome`, and
+`assessment_confusion`. It replaces evaluation v1 and is **not backward compatible**.
+The evaluator, loader and public resolver reject older evaluation/public contracts;
+there is no migration, historical rescoring or historical artifact rewrite.
+Manifest, runtime and canonical-export schema versions remain unchanged.
+
+Execution status comes from the parent receipt (or `started` without a finish,
+`not-run` without a start). Assessment status is one of:
+
+- `accepted`: latest terminal Agent result passes canonical export, identity,
+  acceptance projection, seal, provenance, completed attempt and designated-input
+  evidence/binding checks; independent of execution success.
+- `unresolved`: validated nonterminal result such as blocked or insufficient-evidence.
+- `invalid`: a present export/result fails integrity or acceptance checks.
+- `unavailable`: missing export/result or missing parent receipt. No log/session recovery.
+
+Only accepted assessments enter a single confusion matrix:
 vulnerable/confirmed=TP, vulnerable/not-confirmed=FN, safe/confirmed=FP,
-safe/not-confirmed=TN. Missing canonical results and native unresolved outcomes
-are unresolved. Corrupt/unaccepted/stale result exports are invalid-result.
-Execution failures are execution-failed; untouched cases are not-run. The partition
-accounts for all scheduled cases. Completed is a separate execution count, not
-a synonym for evaluable. Neither unresolved nor execution failure is a negative.
+safe/not-confirmed=TN. Never fall back to an older accepted result when the latest
+result is unresolved, stale, unaccepted or invalidated by a new attempt.
+Each record contributes once to each independent status dimension. Do not add
+execution and assessment counts together.
 
 Reports contain SQLi, XSS, overall and four-stratum counts, reasons and timing
 distributions grouped by execution status. Recall=TP/(TP+FN), FPR=FP/(FP+TN),
-precision=TP/(TP+FP), evaluability=evaluable/scheduled. Empty denominators are null.
-Correctness metrics are conditional on the evaluable subset; low evaluability
+Precision=TP/(TP+FP), Assessment Coverage=accepted/scheduled,
+Completion Rate=parent-completed/scheduled. Empty denominators are null.
+Coverage and completion appear in statistics/CSV/Markdown, without new charts.
+Correctness is conditional on accepted assessments; low Assessment Coverage
 can introduce selection bias. Balanced-sample precision is not deployment
 precision. Timing reports n/mean/median/nearest-rank-ceiling p95 and do not mix
 timeouts with completed runs.
@@ -318,9 +336,9 @@ For old runs without a record, the reader interprets smoke mode as
 `development/smoke`; other modes have unknown classification, meaning official
 status was not declared. Historical `default`/`reduced` manifests and records
 emitted by the old `--run-kind` option retain their existing interpretation,
-including declared official runs of other historical sizes. They remain readable,
-evaluable and reportable; existing artifacts are never migrated or rewritten by
-this mode mapping. No new official designation is inferred from a historical
+including declared official runs of other historical sizes. This designation mapping
+is unchanged; evaluation/reporting still requires the current v2 contract.
+Historical evaluation v1 artifacts are not read, migrated or rewritten. No new official designation is inferred from a historical
 manifest's name or size. Legacy programmatic runner contracts remain available
 for offline fixtures and reset verification.
 
@@ -372,7 +390,7 @@ Progress uses flushed, ordinary stderr lines for TTY and redirected output;
 stdout retains the final JSON object. `--progress none` suppresses progress.
 The renderer receives the persisted parent start/finish rows and verified/blocked
 reset receipts; it never interprets missing exports as persistence success or
-execution completion as evaluability. Post-run evaluator partitions are shown
+execution completion as evaluability. Post-run execution and assessment statuses are shown
 separately. For example (illustrative times, not a recorded run):
 
 ```text
@@ -407,7 +425,8 @@ New executions physically separate canonical/runtime storage from public output:
 <project>/artifacts/benchmarks/<run-name>/
 ├── report/
 │   ├── summary.csv
-│   ├── partitions.csv
+│   ├── execution.csv
+│   ├── assessments.csv
 │   ├── per-case.csv
 │   ├── abnormal-analysis-template.csv
 │   ├── thesis-tables.md
@@ -473,7 +492,7 @@ legacy run), root-level evaluation filenames, and sibling staging/fallback.
 No historical files, hashes, symlinks or backing directories are migrated,
 rewritten or moved, including `scenario1-smoke-run-01`.
 
-New public exports always contain SVG charts, `summary.csv`, `partitions.csv`,
+New public exports always contain SVG charts, `summary.csv`, `execution.csv`, `assessments.csv`,
 `per-case.csv`, `thesis-tables.md`, `abnormal-analysis-template.csv`, `report.json`,
 `results/index.json` and per-testcase JSON with sanitized embedded evidence.
 Both `run` and offline `report` export all formats by default. No HTML dashboard,
@@ -482,9 +501,8 @@ The old `--export-csv` option is accepted by both commands as a compatibility
 no-op; `write_report(..., export_csv=True)` also produces the same components
 and bytes as the default (apart from destination-relative index bindings).
 Legacy runs retain their existing report directory contract and default
-CSV/Markdown/JSON/SVG exports. Only
-evaluable cases enter the confusion matrix. Numerators/denominators, NA semantics,
-metrics, evaluator identity and scoring are unchanged. Report tables retain the
+CSV/Markdown/JSON/SVG exports. Only accepted terminal assessments enter the confusion matrix. Evaluation identity
+and scoring follow the single current v2 contract described above. Report tables retain the
 restricted presentation model. Public case JSON adds the testcase ID, sanitized
 operational input, assessment identity/acceptance, outcome, evaluation reason,
 external truth/confusion and recorded resource metrics. Truth is joined only by
@@ -492,7 +510,7 @@ the parent exporter after execution. Full workflow, observations, transcript,
 permission decisions/journal, provider configuration and workspace paths are
 excluded. Free-form assessment rationale stays internal.
 
-New public case schema `scenario1-public-case-v3` and `projection_binding` are distinct
+New public case schema `scenario1-public-case-v4` and `projection_binding` are distinct
 from the sealed canonical export. Selected evidence is bounded to 8192 bytes per
 selected primary response, sanitized with the production evidence redactor,
 with local filesystem references removed. It has its own public SHA-256, the
@@ -504,16 +522,16 @@ Each source retains canonical source/body hashes, source kind, original byte
 range, JSON pointer, pseudonymous observation reference and truncation flags.
 The 8192-byte public content limit and 32-source canonical bound are enforced.
 Canonical evidence and seals are untouched. The public index schema is now
-`scenario1-public-results-v5`: its root contains `report/`, `results/`, and
+`scenario1-public-results-v6`: its root contains `report/`, `results/`, and
 `findings/` when a current persisted finding is available. Its file bindings
 cover all default report components, case JSON and exported finding Markdown.
-Canonical schemas, scoring and hash formulas do not change.
+Canonical schemas, evidence seals and their hash formulas do not change; evaluation scoring uses v2.
 Each case JSON includes `finding.status` (`persisted`, `pending`,
 `not-applicable`, or `unknown`), `finding.report_ref` relative to that JSON,
 and a fixed diagnostic `finding.reason` when applicable. The existing
 `persisted_finding` field reflects whether a current report was exported;
 it is null when the result cannot be determined.
-Finding export requires an evaluable accepted confirmed assessment, a matching
+Finding export requires an accepted confirmed assessment, a matching
 persisted-result fingerprint, and exactly one report in this execution's
 `workspaces/<execution-id>/artifacts/findings/`. Candidate, class, endpoint,
 assessment/evidence bindings, severity and observed impact must match the
@@ -527,15 +545,9 @@ cleanup when relevant, and remediation when recorded. They link directly to
 `../results/<BenchmarkTest-id>.json` for selected evidence and its provenance;
 operational IDs and binding hashes stay out of the reader report.
 Internal workspace reports remain unchanged. No intermediate compact Markdown
-is created in the execution workspace. The public case JSON schema remains v3;
-index v5 distinguishes the new Finding presentation for integrity reconstruction.
-The resolver still reads and verifies v1 public trees against their
-original case/TXT projections and v2 trees with their original `index.html` and
-case v2 projections, as well as v3 trees with their original two directories.
-Public v4 trees retain their original full Finding renderer and byte comparisons.
-Missing or extra v4/v5 components fail closed even if the
-public file list is rebound. Smoke 1 and Smoke 2 are
-never rewritten or migrated.
+is created in the execution workspace. The current public case schema is v4 and index v6. Older public contracts are
+rejected; historical files remain untouched. Missing or extra components fail closed
+even if the public file list is rebound.
 The index stores compact resolution/integrity information, not copied manifests
 or large metadata snapshots. Hashes detect corruption and bind the local
 artifacts; they are not authentication against someone who can rewrite all data.
@@ -560,17 +572,18 @@ Charts keep their existing statistical definitions, including completed-case
 medians and pagination after 20 cases. An official 40-case run therefore retains
 two additional case-chart pages beyond the eight base figures.
 
-The loader recomputes the existing evaluator v1 identity from the semantic
+The loader recomputes the current evaluator v2 identity from the semantic
 manifest, non-evaluated lifecycle rows, partial-tail flag and (when present)
 orphan diagnostic bindings. Scheduled hashes, result inventory/references and
 run/case/execution bindings are checked separately. Recorded evaluations must
-agree, with the original fail-fast exception. Missing or unusable diagnostics
-can become NA only in invalid-result/execution-failed cases; identity conflicts
-fail even there. Orphans never establish completion or contribute worker metrics.
+agree, including the scheduler-skip receipt for untouched cases. Missing or unusable
+diagnostics become NA; identity conflicts fail even there. Orphans never establish
+completion or contribute worker metrics.
 Counts are cross-checked against records, truth and parent lifecycle, including
 overall/class totals and supplied strata; rates retain the evaluator's
-zero-denominator null semantics. Reporting validates consistency; it does not rerun
-workflow acceptance/scoring or attest that the Agent's assessment is correct.
+zero-denominator null semantics. Reporting rechecks frozen canonical acceptance
+and evidence with the shared offline inspector. It never executes the Agent or
+certifies that the assessment is scientifically correct.
 
 Report tables and metadata present run/case identifiers, provider/model labels
 and commit identifiers as deterministic pseudonyms:
@@ -615,14 +628,14 @@ kill can leave private staging. Filesystem permission support and power-loss
 durability remain platform-dependent; a process allowed to rename directories
 can still race the final inode check. There is no asynchronous/offloaded writer,
 non-atomic overwrite repair or automatic duplicate report. Partition SVGs retain
-all five labeled counts (including zeros), patterned segments and a count table.
+all four assessment-status counts (including zeros), patterned segments and a count table.
 
 The compatibility report figures are `charts/class-metrics.svg`,
 `charts/evaluation-partitions.svg`, `charts/processing-time.svg` and
 `charts/total-tokens.svg`; `charts/confusion-matrix.svg` is an appendix figure.
 These compatibility figures share Arial, title/classification/subtitle placement, typography,
-borders and number formatting. Accepted/evaluable results use green; unresolved
-uses ochre, failures red, invalid results purple and unrun cases gray. Partition
+borders and number formatting. Accepted assessments use green, unresolved uses ochre, invalid uses purple and
+unavailable uses gray. Partition
 patterns and explicit counts, metric labels, class labels and NA text preserve
 meaning without color. SQLi/XSS colors are consistent across both case charts.
 
@@ -653,46 +666,30 @@ The default thesis selection is exactly three separate, full-width figures:
 
 | Figure | File under `charts/` | Quantity |
 |---|---|---|
-| F1 | `scenario1-validation-quality.svg` | Recall, Precision, FPR, Tỷ lệ đánh giá được (Evaluability) in SQLi then XSS blocks |
+| F1 | `scenario1-validation-quality.svg` | Recall, Precision, FPR in SQLi then XSS blocks |
 | F2 | `scenario1-processing-time-median.svg` | Median available Agent interval for parent-completed cases, seconds |
 | F3 | `scenario1-total-tokens-median.svg` | Median complete total tokens for parent-completed cases, thousands |
 
 `thesis-tables.md` is a deterministic presentation projection with suggested
-captions and classification context, T1A outcomes, T1B evaluable-only confusion
+captions and classification context, T1A execution, T1B assessment, T1C accepted-only confusion
 counts, T2A time, T2B tokens, conditional T2C non-completed resources, a separate
 missing-final-status ledger when needed, and T3 workload for the entire schedule.
-Table row order is SQLi/XSS/Tổng. Existing CSV schemas, canonical metrics,
-per-case ordering/identifiers and compatibility SVG behavior are preserved.
+Table row order is SQLi/XSS/Tổng. CSV/JSON evaluation fields follow v2;
+resource definitions, per-case order/identifiers and SVG canvas/style are preserved.
 New exports list these four additions in `report.json.output_files`; an existing
-smoke report is never migrated or overwritten. A 12-case export now has 14 files;
+smoke report is never migrated or overwritten. A 12-case export now has 15 files;
 larger schedules retain compatibility pagination and three fixed thesis SVGs.
 
 F1 uses canonical rates and fractions on a fixed 0–100% scale. A zero denominator
 is `NA (0/0)`; a measured zero is `0,0% (0/d)`. No overall/composite score is drawn.
 
-Nhãn **Tỷ lệ đánh giá được** (Evaluability) trong F1 và `class-metrics.svg` biểu thị
-số case đánh giá được / tổng case đã lên lịch.
-Chỉ số này biểu thị mức bao phủ, không phải độ đúng. Recall = TP/(TP+FN) là tỷ lệ
-xác nhận đúng trong các case có lỗ hổng theo nhãn chuẩn; Precision = TP/(TP+FP)
-là tỷ lệ xác nhận đúng trong các case Agent xác nhận có lỗ hổng; FPR = FP/(FP+TN)
-là tỷ lệ xác nhận nhầm trong các case không có lỗ hổng theo nhãn chuẩn. Ba tỷ lệ
-này chỉ dùng các case đánh giá được; tỷ lệ có kết quả đánh giá thấp có thể gây
-thiên lệch do chỉ đánh giá được một phần các case. Giữ nguyên Recall, Precision,
-FPR, TP/TN/FP/FN và NA, bảng màu, kích thước và bố cục; chỉ ngắt dòng nhãn dài
-trong vùng nhãn có sẵn. Dùng chú thích trong `thesis-tables.md` để giải thích đầy đủ.
-
-“Đánh giá được” (Evaluable) nghĩa là lần chạy hoàn tất và có kết luận hợp lệ để
-đối chiếu với nhãn chuẩn. “Chưa có kết luận” (Unresolved) bao gồm thiếu kết luận,
-thiếu bằng chứng (`insufficient-evidence`) hoặc còn bị chặn/trì hoãn. “Kết quả
-không hợp lệ” (Invalid result) là tệp kết quả của lần chạy thiếu/hỏng hoặc kết luận
-không đạt kiểm tra tính hợp lệ. “Lỗi thực thi” (Execution failed) và “Chưa chạy”
-(Not run) được giữ riêng. Bốn nhóm này không đủ điều kiện đưa vào TP/TN/FP/FN;
-không coi là TN hoặc FN. `not-confirmed` là kết luận hợp lệ “không xác nhận lỗ
-hổng”, được tính TN/FN theo nhãn chuẩn, khác với “chưa có kết luận”. Không dùng
-“chưa xác nhận” để thay thế cả hai. “Đạt giới hạn tài nguyên” (`budget-exhausted`)
-là chạm giới hạn lời gọi, yêu cầu HTTP hoặc dung lượng ngữ cảnh, không phải hết
-tiền; “Lỗi dịch vụ LLM” (`provider-error`) và “Tiến trình gặp sự cố” (`crashed`)
-vẫn là các trạng thái riêng. Các mã trong CSV/JSON giữ nguyên.
+F1 và `class-metrics.svg` chỉ vẽ Recall, Precision và FPR trên assessment accepted.
+Completion Rate và Assessment Coverage được trình bày trong T1A/T1B và CSV/JSON,
+không thêm biểu đồ riêng. Ba tỷ lệ chất lượng là có điều kiện trên tập accepted;
+coverage thấp có thể gây thiên lệch. Accepted có thể đi cùng timeout, budget-exhausted
+hoặc lỗi; execution status vẫn giữ nguyên. Unresolved, Invalid và Unavailable không
+được tự chuyển thành TN/FN. `not-confirmed` hợp lệ được tính TN/FN theo ground truth.
+`budget-exhausted` là đạt giới hạn tài nguyên; provider-error và crashed giữ riêng.
 
 F2/F3 use parent `final_status=completed`, including unresolved/invalid-result
 cases with usable measurements. Worker status cannot override parent status.
@@ -740,7 +737,7 @@ Captions, cohort definitions, availability and smoke/development classification
 stay in the companion Markdown. Smoke illustrations are not official results.
 
 Resource colors are SQLi `#285c79`, XSS `#6b5b83`; F1 uses blue Recall, green
-Precision, red FPR and gray Tỷ lệ đánh giá được (Evaluability). Class/metric text preserves
+Precision and red FPR. Class/metric text preserves
 meaning in grayscale. White backgrounds, solid bars and light grids have no
 decorative effects. Vietnamese numeric labels use a decimal comma and one
 decimal place; tiny positive values that would round to zero display `<0,1`.

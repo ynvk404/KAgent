@@ -7,8 +7,8 @@ from pathlib import Path
 import re
 from typing import Any
 
-from benchmarks.common.contracts import (CLASSES, PARTITIONS, CaseExecution, EvaluationRecord,
-    RunManifest, decode, digest, file_hash, identifier, read_json)
+from benchmarks.common.contracts import (CLASSES, EVALUATION_SCHEMA, CaseExecution, EvaluationRecord,
+    GroundTruth, OperationalCaseInput, RunManifest, RuntimeSettings, decode, digest, file_hash, read_json)
 from benchmarks.common.recorder import read_records, validate_lifecycle
 from benchmarks.scenario1.core.classification import read_run_designation
 from benchmarks.scenario1.core.bindings import (EVALUATOR, evaluation_identity, orphan_binding,
@@ -35,12 +35,13 @@ def _mapping(value: Any) -> dict:
 
 
 _REASONS = frozenset({
-    'accepted-agent-assessment', 'interrupted-after-start', 'interrupted-before-start',
+    'accepted-agent-assessment',
     'fail-fast', 'missing-execution-export', 'missing-canonical-result',
     'insufficient-evidence', 'browser-required', 'budget-exhausted',
-    'not-confirmed', 'confirmed', 'invalid-result',
+    'not-confirmed', 'confirmed',
     'blocked', 'deferred', 'authorization-required', 'timeout', 'crashed',
     'runtime-error', 'provider-error', 'setup-error',
+    'missing-parent-receipt', 'not-run', 'nonfinal-execution-export', 'assessment-attempt-incomplete',
     # Fixed evaluator diagnostics are useful public reasons. Arbitrary exception
     # messages remain redacted, including filesystem/provider/fixture contents.
     'result artifact hash mismatch', 'execution export identity mismatch', 'execution status conflict',
@@ -135,53 +136,31 @@ def _diagnostic(path: Path, run_id: str, case_id: str, execution_id: str,
         return None
 
 
-def _validate_metrics(metrics: dict, records: dict[str, EvaluationRecord],
-                      truths: dict, histories: dict) -> None:
-    counts = ('scheduled', 'started', 'completed', *PARTITIONS, 'TP', 'TN', 'FP', 'FN')
-    groups = [('overall', metrics['overall'], list(records))]
+def _validate_metrics(metrics: dict, records: dict[str, EvaluationRecord], truths: dict) -> None:
+    from benchmarks.scenario1.core.assessment import assessment_metrics
+    groups = [(metrics['overall'], list(records))]
     if set(metrics['classes']) != set(CLASSES):
         raise ValueError('unexpected evaluator classes')
+    groups += [(metrics['classes'][cls], [cid for cid in records
+               if truths[cid]['vulnerability_class'] == cls]) for cls in CLASSES]
+    keys = {f'{cls}/{label}' for cls in CLASSES for label in ('vulnerable', 'safe')}
+    if not isinstance(metrics.get('strata'), dict) or set(metrics['strata']) != keys:
+        raise ValueError('invalid evaluator strata')
     for cls in CLASSES:
-        groups.append((cls, metrics['classes'][cls],
-                       [cid for cid in records if truths[cid]['vulnerability_class'] == cls]))
-    if 'strata' in metrics:
-        strata = metrics['strata']
-        keys = {f'{cls}/{label}' for cls in CLASSES for label in ('vulnerable', 'safe')}
-        if not isinstance(strata, dict) or set(strata) != keys:
-            raise ValueError('invalid evaluator strata')
-        for cls in CLASSES:
-            for vulnerable, label in ((True, 'vulnerable'), (False, 'safe')):
-                key = f'{cls}/{label}'
-                groups.append((key, strata[key], [cid for cid in records
-                    if truths[cid]['vulnerability_class'] == cls
-                    and truths[cid]['expected_vulnerable'] is vulnerable]))
-    for label, group, ids in groups:
-        if not isinstance(group, dict) or any(type(group.get(k)) is not int or group[k] < 0 for k in counts):
-            raise ValueError('invalid evaluator count')
-        expected = {'scheduled': len(ids),
-                    'started': sum(any(e['kind'] == 'started' for e in histories[cid]) for cid in ids),
-                    'completed': sum(any(e['kind'] == 'runtime-finished' and e['status'] == 'completed'
-                                         for e in histories[cid]) for cid in ids),
-                    **{p: sum(records[cid].partition == p for cid in ids) for p in PARTITIONS},
-                    **{k: sum(records[cid].confusion == k for cid in ids) for k in ('TP', 'TN', 'FP', 'FN')}}
-        if any(group[k] != expected[k] for k in counts):
-            raise ValueError('evaluator count/record/lifecycle mismatch')
-        if sum(group[p] for p in PARTITIONS) != group['scheduled'] or sum(group[k] for k in ('TP', 'TN', 'FP', 'FN')) != group['evaluable']:
-            raise ValueError('evaluator partition/confusion total mismatch')
-        fractions = {'recall': (group['TP'], group['TP'] + group['FN']),
-                     'precision': (group['TP'], group['TP'] + group['FP']),
-                     'fpr': (group['FP'], group['FP'] + group['TN']),
-                     'evaluability': (group['evaluable'], group['scheduled'])}
-        for key, (numerator, denominator) in fractions.items():
-            if key not in group:
-                raise ValueError('missing evaluator rate')
-            value = group[key]
-            expected_rate = numerator / denominator if denominator else None
-            if (value is not None and (type(value) not in (int, float) or not math.isfinite(value))
-                    or value != expected_rate):
-                raise ValueError('evaluator rate/denominator mismatch')
-    if any(metrics['overall'][k] != sum(metrics['classes'][cls][k] for cls in CLASSES) for k in counts):
-        raise ValueError('overall/class evaluator count mismatch')
+        for vulnerable, label in ((True, 'vulnerable'), (False, 'safe')):
+            groups.append((metrics['strata'][f'{cls}/{label}'], [cid for cid in records
+                if truths[cid]['vulnerability_class'] == cls
+                and truths[cid]['expected_vulnerable'] is vulnerable]))
+    for group, ids in groups:
+        expected = assessment_metrics([asdict(records[cid]) for cid in ids])
+        if not isinstance(group, dict):
+            raise ValueError('invalid evaluator metrics')
+        for key, value in expected.items():
+            actual = group.get(key)
+            if actual != value or type(actual) is not type(value):
+                raise ValueError('evaluator count/rate/record mismatch')
+            if isinstance(actual, dict) and any(type(v) is not int for v in actual.values()):
+                raise ValueError('invalid evaluator count')
 
 
 def _select_evaluation(directory: Path, selected: Path | None) -> Path:
@@ -212,11 +191,15 @@ def load_report(directory: Path, evaluation: Path | None = None) -> ReportModel:
     designation = read_run_designation(directory)  # verifies both manifest bindings
     evaluation_path = _select_evaluation(directory, evaluation)
     raw_evaluation = read_json(evaluation_path)
-    if (not isinstance(raw_evaluation, dict) or type(raw_evaluation.get('schema_version')) is not int
-            or raw_evaluation.get('schema_version') != 1):
-        raise ValueError('invalid evaluation artifact')
-    if raw_evaluation.get('evaluator_version') != EVALUATOR:
-        raise ValueError('unsupported evaluator version')
+    if (not isinstance(raw_evaluation, dict)
+            or type(raw_evaluation.get('schema_version')) is not int
+            or raw_evaluation['schema_version'] != EVALUATION_SCHEMA
+            or raw_evaluation.get('evaluator_version') != EVALUATOR):
+        raise ValueError('unsupported evaluation contract; v1 artifacts are not compatible')
+    required = {'schema_version', 'evaluator_version', 'evaluation_identity', 'run_id',
+                'incomplete', 'partial_tail_ignored', 'records', 'metrics'}
+    if set(raw_evaluation) not in (required, required | {'orphan_exports'}):
+        raise ValueError('invalid evaluation artifact fields')
     if raw_evaluation.get('run_id') != manifest.run_id:
         raise ValueError('evaluation/run identity mismatch')
     identity = _safe_identity(raw_evaluation.get('evaluation_identity'))
@@ -228,11 +211,6 @@ def load_report(directory: Path, evaluation: Path | None = None) -> ReportModel:
     records: dict[str, EvaluationRecord] = {}
     for raw in raw_records:
         record = decode(EvaluationRecord, raw)
-        identifier(record.case_id)
-        if (record.partition not in PARTITIONS or not isinstance(record.reason, str)
-                or (record.partition == 'evaluable' and record.confusion not in ('TP', 'TN', 'FP', 'FN'))
-                or (record.partition != 'evaluable' and record.confusion is not None)):
-            raise ValueError('invalid evaluation record values')
         if record.case_id in records:
             raise ValueError('duplicate evaluation case')
         records[record.case_id] = record
@@ -272,60 +250,43 @@ def load_report(directory: Path, evaluation: Path | None = None) -> ReportModel:
             raise ValueError('scheduled manifest/operational hash mismatch')
         path = directory / 'results' / f'{case_id}.json'
         execution = None
+        from benchmarks.scenario1.core.assessment import inspect_assessment, read_bound_execution
         if not finish:
-            expected_partition = 'execution-failed' if start else 'not-run'
             previous = next((row for row in history if row['kind'] == 'evaluated'), None)
-            expected_reason = ('interrupted-after-start' if start else
-                               previous['data']['reason'] if previous else 'interrupted-before-start')
-            if (record.partition, record.reason) != (expected_partition, expected_reason):
-                raise ValueError('evaluation/parent interruption mismatch')
+            reason = ('missing-parent-receipt' if start else
+                      previous['data']['assessment_reason'] if previous else 'not-run')
+            expected = EvaluationRecord(case_id, 'started' if start else 'not-run',
+                                        'unavailable', reason, None, None)
             if start and (path.exists() or path.is_symlink()):
                 expected_results.add(path)
                 orphan_exports.append(orphan_binding(directory, case_id, manifest.run_id, start['execution_id']))
-            # Orphans never supply worker metrics or imply completion.
         else:
-            if finish['status'] != 'completed':
-                if (record.partition, record.reason) != ('execution-failed', finish['status']):
-                    raise ValueError('evaluation/parent failure mismatch')
-            elif record.partition in {'execution-failed', 'not-run'}:
-                raise ValueError('evaluation/parent completion mismatch')
             ref = finish['data'].get('result_ref')
+            trusted, error = None, None
             if ref:
                 if ref != f'results/{case_id}.json':
                     raise ValueError('unexpected result reference')
                 expected_results.add(path)
                 execution = _diagnostic(path, manifest.run_id, case_id, finish['execution_id'],
                                         finish['data'].get('result_sha256'))
-            if record.partition in {'evaluable', 'unresolved'} and (
-                    execution is None or execution.status != 'completed'):
-                raise ValueError('missing/unusable result for evaluated case')
-        if record.partition == 'evaluable' and execution and (
-                execution.result is None or execution.result.get('accepted_at_freeze') is not True
-                or execution.result.get('result_id') is None):
-            raise ValueError('missing accepted canonical export for evaluable case')
-        summary = finish['data'].get('canonical_summary') if finish else None
-        outcome = summary.get('outcome') if isinstance(summary, dict) else None
-        outcome = outcome if isinstance(outcome, str) else None
+                trusted, error = read_bound_execution(path, run_id=manifest.run_id, case_id=case_id,
+                    execution_id=finish['execution_id'], parent_status=finish['status'],
+                    expected_hash=finish['data'].get('result_sha256'))
+            expected = inspect_assessment(case_id, trusted, execution_status=finish['status'],
+                run_id=manifest.run_id, op=decode(OperationalCaseInput, operations[case_id]),
+                settings=decode(RuntimeSettings, manifest.runtime),
+                truth=decode(GroundTruth, truths[case_id]), export_error=error)
+        if record != expected:
+            raise ValueError('assessment/canonical export/parent receipt mismatch')
         truth = truths[case_id]
-        if record.partition == 'evaluable':
-            if record.reason != 'accepted-agent-assessment':
-                raise ValueError('invalid evaluable reason')
-            allowed = {'TP', 'FN'} if truth['expected_vulnerable'] else {'FP', 'TN'}
-            if record.confusion not in allowed:
-                raise ValueError('evaluation truth/confusion mismatch')
-            if (isinstance(summary, dict) and summary.get('outcome') is not None
-                    and outcome not in {'confirmed', 'not-confirmed'}):
-                raise ValueError('unscorable provided outcome for evaluable case')
-            if outcome in {'confirmed', 'not-confirmed'} and ((outcome == 'confirmed') != (record.confusion in {'TP', 'FP'})):
-                raise ValueError('evaluation outcome/confusion mismatch')
         cases.append({
             'case_id': presentation_id('case', case_id), 'vulnerability_class': truth['vulnerability_class'],
             'expected_vulnerable': truth['expected_vulnerable'],
-            'agent_outcome': outcome if outcome in {
-                'confirmed', 'not-confirmed', 'blocked', 'insufficient-evidence',
-                'deferred', 'browser-required', 'authorization-required'} else None,
-            'evaluator_partition': record.partition,
-            'evaluator_reason': _safe_reason(record.reason), 'confusion': record.confusion,
+            'execution_status': record.execution_status,
+            'assessment_status': record.assessment_status,
+            'assessment_reason': _safe_reason(record.assessment_reason),
+            'assessment_outcome': record.assessment_outcome,
+            'assessment_confusion': record.assessment_confusion,
             'final_status': finish['status'] if finish else None,
             'worker_status': execution.status if execution else None,
             'wall_seconds': _number(finish['data'].get('wall_seconds')) if finish else None,
@@ -345,7 +306,7 @@ def load_report(directory: Path, evaluation: Path | None = None) -> ReportModel:
             or raw_evaluation['incomplete'] != incomplete):
         raise ValueError('evaluation recovery state mismatch')
     validate_recorded_evaluations(raw_records, histories, identity)
-    _validate_metrics(metrics, records, truths, histories)
+    _validate_metrics(metrics, records, truths)
     runtime = manifest.runtime or {}
     fixture_values = tuple(value for op in manifest.operational for value in (
         [pair[1] for pair in op['query'] + op['body']] + list(op['headers'].values()) + list(op['cookies'].values()))
@@ -363,7 +324,7 @@ def load_report(directory: Path, evaluation: Path | None = None) -> ReportModel:
     policy_path = directory / 'reset-policy.json'
     policy = _mapping(read_json(policy_path)) if policy_path.exists() or policy_path.is_symlink() else {}
     metadata = {
-        'report_schema_version': 1, 'run_id': presentation_id('run', manifest.run_id),
+        'report_schema_version': EVALUATION_SCHEMA, 'run_id': presentation_id('run', manifest.run_id),
         'identifier_representation': 'sha256-domain-separated-v1',
         'classification': designation.classification, 'classification_qualifier': designation.qualifier,
         'classification_declared': designation.declared,
@@ -380,7 +341,7 @@ def load_report(directory: Path, evaluation: Path | None = None) -> ReportModel:
                             'capability_profile': semantic(repro.get('capability_profile'), r'scenario1-native-http-confirmation-v1')},
         'runtime_limits': {key: _number(runtime.get(key)) for key in ('timeout_seconds', 'http_requests', 'tool_calls', 'agent_calls')},
         'provider_models': [{'provider': presentation_id('provider', p), 'model': presentation_id('model', m)} for p, m in provider_models],
-        'scheduled': metrics['overall']['scheduled'], 'evaluable': metrics['overall']['evaluable'],
+        'scheduled': metrics['overall']['scheduled'], 'assessment_accepted': metrics['overall']['assessment_accepted'],
         'lifecycle_counts': {key: metrics['overall'][key] for key in ('scheduled', 'started', 'completed')},
         'dataset_identity': digest(manifest.dataset),
         'dataset_artifact_hashes': sorted(manifest.dataset['artifacts'].values()),
@@ -391,8 +352,8 @@ def load_report(directory: Path, evaluation: Path | None = None) -> ReportModel:
                            'external_effects_restoration_verified': False if policy.get('external_effects_restoration_verified') is False else None,
                            'note': 'Logical reset does not certify filesystem/process/LDAP effects or full ORM cache parity.'},
     }
-    public_keys = ('scheduled', 'evaluable', 'TP', 'TN', 'FP', 'FN', *PARTITIONS,
-                   'recall', 'precision', 'fpr', 'evaluability')
+    from .aggregate import COUNTS, RATES
+    public_keys = (*COUNTS, *RATES, 'execution_status_counts', 'assessment_status_counts')
     normalized_metrics = {
         'overall': {key: metrics['overall'][key] for key in public_keys},
         'classes': {cls: {key: metrics['classes'][cls][key] for key in public_keys}

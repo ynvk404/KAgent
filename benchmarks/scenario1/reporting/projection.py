@@ -42,7 +42,7 @@ def _input(op: dict) -> dict:
     }
 
 
-def _evidence(export: dict, cid: str, files: dict[str, bytes], version: int) -> tuple[dict | None, list[dict]]:
+def _evidence(export: dict, cid: str) -> tuple[dict | None, list[dict]]:
     result = next((r for r in export['workflow'].get('validation_results', [])
                    if isinstance(r, dict) and r.get('result_id') == export['result_id']), None)
     if result is None:
@@ -68,35 +68,29 @@ def _evidence(export: dict, cid: str, files: dict[str, bytes], version: int) -> 
         # Selected primary response text is a bounded, sanitized derivative, not
         # the canonical body. Both raw and public hashes make that explicit.
         excerpt = _text(body[:8192].decode('utf-8', errors='replace')).encode()
-        ref = f'results/evidence/{cid}-{i}.txt'
-        if version == 1:
-            files[ref] = excerpt
         selected.append({
-            'public_ref': ref.removeprefix('results/'), 'public_sha256': hashlib.sha256(excerpt).hexdigest(),
             'canonical_ref': f'results/{cid}.json',
             'canonical_pointer': f'/result/workflow/validation_results/{export["workflow"]["validation_results"].index(result)}/evidence_manifest/{i}',
             'source_id': presentation_id('source', str(source.get('id'))),
             'canonical_source_sha256': entry['hash'], 'canonical_body_sha256': hashlib.sha256(body).hexdigest(),
             'source_kind': source['source_kind'], 'byte_range': [0, min(len(body), 8192)],
-            'sanitized': True, 'truncated': len(body) > 8192,
+            'sanitized': True,
         })
-        if version >= 2:
-            item = selected[-1]
-            del item['public_ref']
-            content = excerpt[:8192].decode('utf-8', errors='ignore')
-            item.update(content=content, content_encoding='utf-8',
-                        public_sha256=hashlib.sha256(content.encode()).hexdigest(),
-                        truncated=len(body) > 8192 or len(excerpt) > 8192,
-                        observation_ref=presentation_id('observation', str(source.get('id'))),
-                        role=entry.get('role') if entry.get('role') in {
-                            'baseline', 'probe', 'control', 'imported', 'primary', 'trigger',
-                            'readback', 'cleanup', 'auxiliary'} else None,
-                        http_status=_counter(source.get('status')),
-                        response_complete=source.get('complete') if type(source.get('complete')) is bool else None,
-                        upstream_truncated=source.get('truncated') if type(source.get('truncated')) is bool else None,
-                        request_sha256=_safe_identity(source.get('request_hash')),
-                        response_sha256=_safe_identity(source.get('response_hash')),
-                        method=source.get('method') if source.get('method') in {'GET', 'POST', 'HEAD'} else None)
+        item = selected[-1]
+        content = excerpt[:8192].decode('utf-8', errors='ignore')
+        item.update(content=content, content_encoding='utf-8',
+                    public_sha256=hashlib.sha256(content.encode()).hexdigest(),
+                    truncated=len(body) > 8192 or len(excerpt) > 8192,
+                    observation_ref=presentation_id('observation', str(source.get('id'))),
+                    role=entry.get('role') if entry.get('role') in {
+                        'baseline', 'probe', 'control', 'imported', 'primary', 'trigger',
+                        'readback', 'cleanup', 'auxiliary'} else None,
+                    http_status=_counter(source.get('status')),
+                    response_complete=source.get('complete') if type(source.get('complete')) is bool else None,
+                    upstream_truncated=source.get('truncated') if type(source.get('truncated')) is bool else None,
+                    request_sha256=_safe_identity(source.get('request_hash')),
+                    response_sha256=_safe_identity(source.get('response_hash')),
+                    method=source.get('method') if source.get('method') in {'GET', 'POST', 'HEAD'} else None)
     return assessment, selected
 
 
@@ -124,8 +118,7 @@ def _usage(execution) -> dict:
     return output
 
 
-def result_files(root: Path, model: ReportModel, *, version: int = 3,
-                 compact_findings: bool = True) -> dict[str, bytes]:
+def result_files(root: Path, model: ReportModel) -> dict[str, bytes]:
     manifest = decode(RunManifest, read_json(root / 'manifest.json'))
     rows, _ = read_records(root / 'events.jsonl')
     histories = validate_lifecycle(rows)
@@ -145,10 +138,11 @@ def result_files(root: Path, model: ReportModel, *, version: int = 3,
             execution = _diagnostic(root / 'results' / f'{cid}.json', manifest.run_id, cid,
                                     finish['execution_id'], canonical['result_sha256'])
         assessment, evidence = (None, [])
-        if execution and execution.result and summary['evaluator_partition'] in {'evaluable', 'unresolved'}:
-            assessment, evidence = _evidence(execution.result, cid, files, version)
+        eligible = summary['assessment_status'] in {'accepted', 'unresolved'}
+        if execution and execution.result and eligible:
+            assessment, evidence = _evidence(execution.result, cid)
         projection = {
-            'schema': f'scenario1-public-case-v{version}', 'case_id': cid,
+            'schema': 'scenario1-public-case-v4', 'case_id': cid,
             'run_id': presentation_id('run', manifest.run_id),
             'manifest_identity': model.metadata['manifest_identity'],
             'evaluation_identity': model.metadata['evaluation_identity'],
@@ -158,26 +152,17 @@ def result_files(root: Path, model: ReportModel, *, version: int = 3,
             **{k: v for k, v in summary.items() if k != 'case_id'},
             'assessment': assessment, 'canonical': canonical, 'selected_evidence': evidence,
         }
-        if version >= 2:
-            workflow = execution.result.get('workflow', {}) if execution and execution.result else {}
-            persisted = workflow.get('persisted_findings')
-            cid_internal = execution.result.get('candidate_id') if execution and execution.result else None
-            projection.update(usage=_usage(execution),
-                persisted_finding=bool(persisted.get(cid_internal)) if isinstance(persisted, dict) else None,
-                conclusion={'outcome': summary['agent_outcome'],
-                            'agent_limitations': None,
-                            'evaluator_reason': summary['evaluator_reason'],
-                            'free_form_conclusion': None,
-                            'note': 'Free-form agent prose and tool transcripts are not in the public projection.'},
-                tool_diagnostics={'blocked': summary['tool_blocked'], 'failed': summary['tool_failed'],
-                                  'individual_operations': None})
-        if version >= 3:
-            projection['finding'] = finding_file(root, execution, cid, summary['evaluator_partition'], files,
-                                                 sanitize=_text, public_id=presentation_id,
-                                                 compact=compact_findings)
-            projection['persisted_finding'] = (
-                None if projection['finding']['status'] == 'unknown'
-                else projection['finding']['status'] == 'persisted')
+        projection.update(usage=_usage(execution),
+            conclusion={'outcome': summary['assessment_outcome'], 'agent_limitations': None,
+                        'assessment_reason': summary['assessment_reason'], 'free_form_conclusion': None,
+                        'note': 'Free-form agent prose and tool transcripts are not in the public projection.'},
+            tool_diagnostics={'blocked': summary['tool_blocked'], 'failed': summary['tool_failed'],
+                              'individual_operations': None})
+        projection['finding'] = finding_file(root, execution, cid, summary['assessment_status'], files,
+                                             sanitize=_text, public_id=presentation_id)
+        projection['persisted_finding'] = (
+            None if projection['finding']['status'] == 'unknown'
+            else projection['finding']['status'] == 'persisted')
         projection['projection_binding'] = digest(projection)
         files[f'results/{cid}.json'] = json_bytes(projection)
     return files
