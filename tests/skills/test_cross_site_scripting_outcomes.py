@@ -1,21 +1,15 @@
-"""
-test_cross_site_scripting.py
+"""Static guidance contracts, parser contrasts and an authored outcome policy.
 
-This test suite does NOT invoke an LLM. It encodes the decision rules
-described in cross-site-scripting/SKILL.md (steps 2, 3, 3a, and 5) as a
-small reference classifier, and checks that classifier against the
-scenarios the skill explicitly calls out. The goal is to catch logic bugs
-or ambiguity in the skill's decision boundaries *before* they reach an
-agent following the prose instructions — if the reference implementation
-can't satisfy these cases unambiguously, the skill text likely can't
-either.
+This suite does not invoke an LLM. The test-only classifier illustrates intended
+decisions from supplied facts; it neither interprets arbitrary returned code nor
+enforces production outcomes. Simple positive fixtures explicitly assume usable
+evidence, valid code, a runnable path and an established trigger. Passing those
+cases cannot show that an Agent infers those facts correctly.
 
-If you change the outcome rules in SKILL.md, update `classify_xss_outcome`
-to match, then rerun this file. A failing test here is a signal that the
-skill's prose and its actual decision boundary have drifted apart.
-
-Run with:
-    pytest test_cross_site_scripting.py -v
+The separate HTML/optional Node fixtures check constrained structure and syntax.
+They do not execute JavaScript, observe a browser or measure live reasoning.
+Worked examples are read through the bounded resource tool; essential decision
+and evidence instructions are checked in the loaded playbook itself.
 """
 
 from dataclasses import dataclass
@@ -77,6 +71,7 @@ class Outcome(str, Enum):
     NOT_CONFIRMED = "not-confirmed"
     BLOCKED = "blocked"
     BROWSER_REQUIRED = "browser-required"
+    INSUFFICIENT_EVIDENCE = "insufficient-evidence"
 
 
 class ReflectionContext(str, Enum):
@@ -107,6 +102,17 @@ class Probe:
     payload_reflected_unescaped: bool = False
     payload_complete: bool = True
 
+    # Synthetic evidence states, not production classifiers. Existing simple
+    # fixtures assume usable captures, valid code and an established trigger.
+    # Transformation fixtures below derive syntax from actual returned source.
+    effective_code_syntax_valid: bool | None = True
+    trigger_established: bool = True
+    csp_blocks_payload: bool = False
+    usable_primary_evidence: bool = True
+    bounded_test_complete: bool = True
+    other_hypotheses_pending: bool = False
+    hypothesis_ruled_out: bool = False
+
     # for js_string: does the response evidence deterministically show the
     # break-out landing in an executable position (not just "the marker
     # text appears somewhere in the response")?
@@ -128,8 +134,9 @@ def classify_xss_outcome(probe: Probe) -> Outcome:
 
     Decision order matters and mirrors the skill's stated precedence:
     1. an upstream block always wins — the application was never tested.
-    2. fully encoded/neutralized reflection is a clean negative.
-    3. context determines whether HTTP-level evidence alone can support
+    2. unusable/incomplete evidence or unknown syntax cannot confirm.
+    3. a failed transformed variant alone is not a bounded negative.
+    4. context determines whether HTTP-level evidence alone can support
        `confirmed`, or whether it can only ever support
        `browser-required`.
     """
@@ -139,22 +146,36 @@ def classify_xss_outcome(probe: Probe) -> Outcome:
     if probe.upstream_blocked:
         return Outcome.BLOCKED
 
+    if not probe.usable_primary_evidence or not probe.payload_complete:
+        return Outcome.INSUFFICIENT_EVIDENCE
+
+    negative = (Outcome.NOT_CONFIRMED
+                if probe.bounded_test_complete and not probe.other_hypotheses_pending
+                else Outcome.INSUFFICIENT_EVIDENCE)
+    if probe.effective_code_syntax_valid is None:
+        return Outcome.INSUFFICIENT_EVIDENCE
+    if not probe.effective_code_syntax_valid or probe.csp_blocks_payload:
+        return negative if probe.hypothesis_ruled_out else Outcome.INSUFFICIENT_EVIDENCE
+
     if probe.context == ReflectionContext.ENCODED:
-        return Outcome.NOT_CONFIRMED
+        return negative
+
+    if probe.payload_reflected_unescaped and not probe.trigger_established:
+        return Outcome.BROWSER_REQUIRED
 
     if probe.context in (
         ReflectionContext.HTML_BODY,
         ReflectionContext.HTML_ATTRIBUTE,
     ):
-        # deterministic browser parsing context: HTTP-level evidence of
-        # unescaped reflection is sufficient for `confirmed`.
+        # These synthetic positive fixtures also assume valid effective code,
+        # an established trigger, no policy blocker and usable captured bytes.
         if probe.payload_reflected_unescaped and probe.payload_complete:
             return Outcome.CONFIRMED
-        return Outcome.NOT_CONFIRMED
+        return negative
 
     if probe.context == ReflectionContext.JS_STRING:
         if not probe.payload_reflected_unescaped:
-            return Outcome.NOT_CONFIRMED
+            return negative
         if probe.js_breakout_deterministic and probe.payload_complete:
             return Outcome.CONFIRMED
         # reflected, but whether the break-out actually lands in an
@@ -174,12 +195,12 @@ def classify_xss_outcome(probe: Probe) -> Outcome:
             except ValueError:
                 return Outcome.BROWSER_REQUIRED  # Unknown handling is unresolved.
             if scheme in {"http", "https"}:
-                return Outcome.NOT_CONFIRMED  # This bounded scheme vector is neutralized.
+                return negative  # This bounded scheme vector is neutralized.
             return Outcome.BROWSER_REQUIRED
         # Preserve existing cases that supply only a reflection observation.
         if probe.payload_reflected_unescaped:
             return Outcome.BROWSER_REQUIRED
-        return Outcome.NOT_CONFIRMED
+        return negative
 
     if probe.context == ReflectionContext.DOM_BASED:
         # observed execution alone is sufficient — it doesn't need
@@ -190,7 +211,7 @@ def classify_xss_outcome(probe: Probe) -> Outcome:
             return Outcome.CONFIRMED
         if probe.dom_sink_path_plausible:
             return Outcome.BROWSER_REQUIRED
-        return Outcome.NOT_CONFIRMED
+        return negative
 
     raise ValueError(f"unhandled context: {probe.context}")
 
@@ -455,7 +476,7 @@ class TestOrdinaryStatusCodesNeverAutoBlockClassify:
         assert result == Outcome.NOT_CONFIRMED
 
 
-class TestOutcomeIsAlwaysExactlyOneOfFour:
+class TestOutcomeIsAlwaysValid:
     """Step 5: 'every candidate gets exactly one outcome.' Sweep a broad
     grid of plausible evidence combinations and assert the classifier
     always resolves to a single valid Outcome member — i.e. it's a total
@@ -633,6 +654,36 @@ def loaded_xss():
     return asyncio.run(LoadSkillTool(registry).run({'name': 'cross-site-scripting'}))
 
 
+@pytest.fixture(scope='module')
+def context_traces(loaded_xss):
+    """Worked examples stay accessible through the existing bounded reader."""
+    import json
+    from src.permission.permission import AlwaysAllow
+    from src.tools.skills.payloads import ReadPayloadsTool
+
+    registry = Registry()
+    registry.load_dir(Path(__file__).resolve().parents[2] / 'skills')
+    assert 'file="context-reasoning.md"' in loaded_xss
+
+    async def read():
+        reader = ReadPayloadsTool(registry)
+        args = {'skill': 'cross-site-scripting', 'file': 'context-reasoning.md', 'limit': 13}
+        chunks = []
+        while True:
+            output = await reader.run(args, None, AlwaysAllow())
+            rendered, footer = output.rsplit('\nContinuation: ', 1)
+            page = json.loads(footer)
+            chunks.append(rendered.split('\n', 1)[1][:page['end_char'] - page['start_char']])
+            if page['next_start_char'] is None:
+                return ''.join(chunks)
+            args = json.loads(rendered.splitlines()[0].split('Next page: ', 1)[1])['arguments']
+
+    text = asyncio.run(read())
+    assert text == (Path(__file__).resolve().parents[2] / 'skills' / 'cross-site-scripting' /
+                    'payloads' / 'context-reasoning.md').read_text(encoding='utf-8')
+    return text
+
+
 class SourceTokens(HTMLParser):
     """Local attribute/text fixtures only, not an HTML5 browser or XSS oracle."""
 
@@ -655,8 +706,8 @@ class SourceTokens(HTMLParser):
 
 
 @pytest.mark.parametrize('row', range(4), ids=['double', 'single', 'unquoted', 'entity-quote'])
-def test_loaded_attribute_examples_match_full_assembly_and_attribute_decoding(loaded_xss, row):
-    lines = [line for line in loaded_xss.splitlines() if line.startswith('| `<input value=')]
+def test_bundled_attribute_examples_match_full_assembly_and_attribute_decoding(context_traces, row):
+    lines = [line for line in context_traces.splitlines() if line.startswith('| `<input value=')]
     assert len(lines) == 4
     template, submitted, returned = re.findall(r'`([^`]+)`', lines[row])[:3]
     assert template.replace('{input}', submitted) == returned
@@ -680,15 +731,15 @@ def test_html_backslash_does_not_escape_a_delimiter_and_wrong_quote_can_stay_dat
     assert 'data-probe' not in tokens.tags[0][1]
 
 
-def test_loaded_nested_html_js_and_url_examples_decode_one_layer(loaded_xss):
-    handler_match = re.search(r'`(<button onclick="[^`]+</button>)`', loaded_xss)
+def test_bundled_nested_html_js_and_url_examples_decode_one_layer(context_traces):
+    handler_match = re.search(r'`(<button onclick="[^`]+</button>)`', context_traces)
     assert handler_match is not None
     source = handler_match[1]
     tokens = SourceTokens(source)
     handler = tokens.tags[0][1]['onclick']
     assert handler == "show('x');document.title='xsspoc-demo7';//')"
     assert '&#39;' in source and '&#39;' not in handler
-    anchor_match = re.search(r'`(<a href="javascript:[^`]+</a>)`', loaded_xss)
+    anchor_match = re.search(r'`(<a href="javascript:[^`]+</a>)`', context_traces)
     assert anchor_match is not None
     anchor = anchor_match[1]
     href = SourceTokens(anchor).tags[0][1]['href']
@@ -698,8 +749,8 @@ def test_loaded_nested_html_js_and_url_examples_decode_one_layer(loaded_xss):
     assert urlsplit(encoded).scheme == ''  # HTML attribute decoding adds no percent decode.
 
 
-def test_loaded_transformations_are_source_changes_not_execution_events(loaded_xss):
-    section = loaded_xss.split('**Transformations:', 1)[1].split('## 3. Confirm', 1)[0]
+def test_bundled_transformations_are_source_changes_not_execution_events(context_traces):
+    section = context_traces.split('**Transformations:', 1)[1]
     rows = [re.findall(r'`([^`]+)`', line)[:2] for line in section.splitlines()
             if line.startswith('| `')]
     encoded, escaped, stripped, attributes, clipped, url = rows
@@ -719,8 +770,8 @@ def test_loaded_transformations_are_source_changes_not_execution_events(loaded_x
 
 
 @pytest.fixture(scope='module')
-def js_sources(loaded_xss):
-    match = re.search(r'```javascript\s*\n(.*?)```', loaded_xss, re.S)
+def js_sources(context_traces):
+    match = re.search(r'```javascript\s*\n(.*?)```', context_traces, re.S)
     assert match is not None
     block = match[1]
     return dict(re.findall(r'const (\w+)=(.*);', block))
@@ -776,3 +827,241 @@ def test_loaded_dom_stored_and_policy_traces_keep_the_missing_proof_explicit(loa
                     'report-only', 'does not enforce blocking', 'embedding/sandbox',
                     'needs its interaction', 'do not simulate an event'):
         assert concept in policy
+
+
+def test_loaded_returned_code_checkpoint_precedes_outcome_and_preserves_adaptation(loaded_xss):
+    # Static delivery/content contract; never a claim about model compliance.
+    section = ' '.join(loaded_xss.split('**Returned-code checkpoint', 1)[1]
+                       .split('Interpret the result according', 1)[0].split()).lower()
+    steps = ('submitted input', 'actual returned bytes', 'parser context',
+             'effective code', 'syntax/trigger assessment', 'evidence decision')
+    positions = [section.index(step) for step in steps]
+    assert positions == sorted(positions)
+    for concept in (
+        'read the retained http observation', 'escaping, encoding, sanitization and filtering',
+        'html character-reference decoding first', 'preserve backslashes',
+        'do not manually unescape js source', 'complete script/handler',
+        'assess each resulting executable unit separately',
+        'invalid returned code cannot support `confirmed`',
+        'syntax only, never browser execution', 'existing proof and assessment/notes',
+        'actually observed browser execution', 'before sending',
+        'apply this entire checkpoint to the new observation',
+        'changing tags alone does not repair', 'adverse evidence',
+        'do not demand another probe', '`insufficient-evidence`', '`browser-required`',
+        'not one failed payload',
+    ):
+        assert concept in section
+
+
+def test_corpus_examples_require_post_transformation_reassessment(payloads_text):
+    for concept in (
+        'Each example is a hypothesis, not proof', "SKILL.md step 3's returned-code",
+        'effective code -> syntax/trigger assessment -> evidence decision',
+        'Keep surviving backslashes', 'do not unescape JavaScript source by hand',
+        "returned document.title=\\'sample\\' is invalid JS",
+        'Changing the enclosing tag does not fix that expression',
+        'predict its returned structure, effective code and confirmation conditions',
+        'not a universal strategy', 'one failure does not rule out other',
+    ):
+        assert concept in payloads_text
+
+
+@pytest.mark.parametrize('placement', ['script', 'handler'])
+@pytest.mark.parametrize('marker', ['synthetic-alpha', 'synthetic-beta'])
+def test_server_escaping_breaks_effective_code_despite_successful_html_breakout(placement, marker):
+    intended = f"document.title='{marker}'"
+    assert check_js_syntax(intended).returncode == 0
+    element = (f'<script>{intended}</script>' if placement == 'script'
+               else f'<img src=x onerror="{intended}">')
+    submitted = '</script>' + element
+    transformed = submitted.replace('\\', '\\\\').replace("'", "\\'")
+    returned = "<script>const value='" + transformed + "';</script>"
+    tokens = SourceTokens(returned)
+    if placement == 'script':
+        assert [tag for tag, _ in tokens.tags] == ['script', 'script']
+        effective = next(part for part in tokens.data if part.startswith('document.title='))
+        context = ReflectionContext.JS_STRING
+    else:
+        assert [tag for tag, _ in tokens.tags] == ['script', 'img']
+        effective = tokens.tags[1][1]['onerror']
+        context = ReflectionContext.HTML_ATTRIBUTE
+    assert effective == intended.replace("'", "\\'")
+    # A handler is parsed in a function body; parsing never invokes the function.
+    syntax = check_js_syntax(effective if placement == 'script'
+                             else 'function handler(event){' + effective + '}')
+    assert syntax.returncode != 0 and 'SyntaxError' in syntax.stderr
+    probe = Probe(context, payload_reflected_unescaped=True,
+                  js_breakout_deterministic=True,
+                  effective_code_syntax_valid=syntax.returncode == 0,
+                  other_hypotheses_pending=True)
+    assert classify_xss_outcome(probe) == Outcome.INSUFFICIENT_EVIDENCE
+
+
+def test_quote_free_adaptation_preserves_syntax_but_does_not_observe_execution():
+    submitted = '</script><script>document.title=731942</script>'
+    transformed = submitted.replace('\\', '\\\\').replace("'", "\\'")
+    assert transformed == submitted
+    tokens = SourceTokens("<script>const value='" + transformed + "';</script>")
+    assert check_js_syntax(tokens.data[0]).returncode != 0  # Terminated original script.
+    effective = next(part for part in tokens.data if part.startswith('document.title='))
+    assert effective == 'document.title=731942'
+    assert check_js_syntax(effective).returncode == 0
+    # Valid returned JS is still insufficient when other proof facts are unknown.
+    assert classify_xss_outcome(Probe(ReflectionContext.HTML_BODY,
+        payload_reflected_unescaped=True, usable_primary_evidence=False)) == Outcome.INSUFFICIENT_EVIDENCE
+
+
+@pytest.mark.parametrize(('encoded_quotes', 'effective_quotes', 'valid'), [
+    ('&#39;', "'", True),
+    ('&#92;&#39;', "\\'", False),
+    ('&amp;#39;', '&#39;', False),
+])
+def test_handler_decodes_html_once_then_preserves_effective_js(encoded_quotes, effective_quotes, valid):
+    expression = f'document.title={encoded_quotes}sample{encoded_quotes};return false'
+    tokens = SourceTokens(f'<button onclick="{expression}">fixture</button>')
+    effective = tokens.tags[0][1]['onclick']
+    assert effective == f'document.title={effective_quotes}sample{effective_quotes};return false'
+    syntax = check_js_syntax('function handler(event){' + effective + '}')
+    assert (syntax.returncode == 0) is valid
+    probe = Probe(ReflectionContext.HTML_ATTRIBUTE, payload_reflected_unescaped=True,
+                  effective_code_syntax_valid=valid, trigger_established=False)
+    assert classify_xss_outcome(probe) == (Outcome.BROWSER_REQUIRED if valid
+                                          else Outcome.INSUFFICIENT_EVIDENCE)
+
+
+@pytest.mark.parametrize(('header', 'expected'), [
+    ('Content-Security-Policy', Outcome.INSUFFICIENT_EVIDENCE),
+    ('Content-Security-Policy-Report-Only', Outcome.CONFIRMED),
+])
+def test_valid_returned_inline_code_does_not_override_an_enforced_policy(header, expected):
+    # A controlled, single-policy fixture; this is not a general CSP evaluator.
+    headers = {header.lower(): "script-src 'none'"}
+    response = '<script>document.title=731942</script>'
+    effective = SourceTokens(response).data[0]
+    assert check_js_syntax(effective).returncode == 0
+    probe = Probe(ReflectionContext.HTML_BODY, payload_reflected_unescaped=True,
+                  csp_blocks_payload=headers.get('content-security-policy') == "script-src 'none'")
+    assert classify_xss_outcome(probe) == expected
+
+
+@pytest.mark.parametrize(('facts', 'expected'), [
+    ({'effective_code_syntax_valid': False}, Outcome.INSUFFICIENT_EVIDENCE),
+    ({'effective_code_syntax_valid': None}, Outcome.INSUFFICIENT_EVIDENCE),
+    ({'trigger_established': False}, Outcome.BROWSER_REQUIRED),
+    ({'csp_blocks_payload': True}, Outcome.INSUFFICIENT_EVIDENCE),
+    ({'csp_blocks_payload': True, 'hypothesis_ruled_out': True}, Outcome.NOT_CONFIRMED),
+    ({'csp_blocks_payload': True, 'hypothesis_ruled_out': True,
+      'other_hypotheses_pending': True}, Outcome.INSUFFICIENT_EVIDENCE),
+    ({'effective_code_syntax_valid': False, 'hypothesis_ruled_out': True,
+      'bounded_test_complete': False}, Outcome.INSUFFICIENT_EVIDENCE),
+    ({'effective_code_syntax_valid': False, 'hypothesis_ruled_out': True}, Outcome.NOT_CONFIRMED),
+    ({'usable_primary_evidence': False}, Outcome.INSUFFICIENT_EVIDENCE),
+    ({'payload_complete': False}, Outcome.INSUFFICIENT_EVIDENCE),
+])
+def test_returned_code_reference_decisions_separate_proof_gaps_from_bounded_negatives(facts, expected):
+    # Test-only evidence policy, not runtime validation or a browser oracle.
+    probe = Probe(ReflectionContext.HTML_BODY, payload_reflected_unescaped=True, **facts)
+    assert classify_xss_outcome(probe) == expected
+
+
+def test_loaded_reassessment_distinguishes_failed_techniques_from_candidate_closure(loaded_xss):
+    # Instruction-delivery contract, not an unscripted model evaluation.
+    checkpoint = ' '.join(loaded_xss.split('## Decision checkpoint', 1)[1]
+                          .split('## Runtime completion contract', 1)[0].split()).lower()
+    assert 'observe → model context → form hypotheses → predict → probe → interpret → adapt → reassess → decide' in checkpoint
+    closure = loaded_xss[loaded_xss.index('**Before ending validation**'):]
+    checkpoint += ' ' + ' '.join(closure.split('Synthetic returned-code contrasts', 1)[0].split()).lower()
+    for concept in (
+        'before ending validation', 'predicted versus observed result with observation ids',
+        'essential distinct hypothesis still supported by observations',
+        'a failed payload or neutralized technique does not alone refute its whole candidate',
+        'minimal non-destructive discriminating test', 'scope, permission and remaining resources',
+        'continue the owned attempt without asking the user to repeat the same goal',
+        'actual stop reason', 'equivalent variants add no information',
+        'do not enumerate every payload or parser boundary', 'no numeric variant cap',
+        'minimal evidence, not minimal reasoning', 'sufficient positive evidence needs no extra probes',
+        'other separately evidenced sinks', 'candidate identity/association rules',
+    ):
+        assert concept in checkpoint
+    phase = ' '.join(loaded_xss.split('## 3. Confirm', 1)[1]
+                     .split('Keep the proof non-destructive', 1)[0].split()).lower()
+    for concept in ('after any non-confirming probe', 'valid but inert code',
+                    'neutralized output or an inconclusive response', 'compare observation with prediction',
+                    'specific missing browser-only fact', 'available permitted http test can discriminate',
+                    'do not require extra http when only unavailable browser behavior remains'):
+        assert concept in phase
+
+
+def test_loaded_negative_and_raw_evidence_require_scoped_justification(loaded_xss, payloads_text):
+    section = ' '.join(loaded_xss.split('## 5. Record', 1)[1].split()).lower()
+    for concept in (
+        'raw response excerpts must preserve the retained observation representation',
+        'including html entities, backslashes and existing redaction', 'copy from the owned observation',
+        'do not silently replace entities with decoded characters',
+        'label any decoded/effective-code representation separately as analysis',
+        'why no essential supported hypothesis within it remains unresolved',
+        'do not require disproving every imaginable xss vector',
+        'budget/permission limits with essential questions still open',
+    ):
+        assert concept in section
+    for concept in ('valid but inert code', 'predicted/actual result', 'essential supported alternatives',
+                    'within budget', 'without asking the user to repeat the goal',
+                    'Browser absence alone', 'Label decoded analytical representations separately',
+                    'a reconstructed response is new evidence'):
+        assert concept in payloads_text
+
+
+@pytest.mark.parametrize(('essential_alternative_open', 'bounded_complete', 'expected'), [
+    (True, True, Outcome.INSUFFICIENT_EVIDENCE),
+    (True, False, Outcome.INSUFFICIENT_EVIDENCE),
+    (False, False, Outcome.INSUFFICIENT_EVIDENCE),
+    (False, True, Outcome.NOT_CONFIRMED),
+])
+def test_valid_inert_probe_is_only_a_negative_for_resolved_bounded_scope(
+    essential_alternative_open, bounded_complete, expected,
+):
+    submitted = "';document.title=731942;//"
+    transformed = submitted.replace('\\', '\\\\').replace("'", "\\'")
+    returned = "<script>const value='" + transformed + "';</script>"
+    effective = SourceTokens(returned).data[0]
+    assert effective == r"const value='\';document.title=731942;//';"
+    assert check_js_syntax(effective).returncode == 0  # Valid JS; the marker remains string data.
+    probe = Probe(ReflectionContext.JS_STRING, payload_reflected_unescaped=False,
+                  other_hypotheses_pending=essential_alternative_open,
+                  bounded_test_complete=bounded_complete)
+    assert classify_xss_outcome(probe) == expected
+
+
+@pytest.mark.parametrize(('entity', 'decoded'), [
+    ('&apos;', "'"), ('&#39;', "'"), ('&#x27;', "'"),
+    ('&#92;', '\\'), ('&amp;apos;', '&apos;'),
+])
+def test_raw_html_entities_are_preserved_separately_from_decoded_analysis(entity, decoded):
+    raw_excerpt = '<h1>marker' + entity + '</h1>'
+    analysis = SourceTokens(raw_excerpt)
+    assert analysis.tags == [('h1', {})]
+    assert analysis.data == ['marker' + decoded]
+    assert raw_excerpt != '<h1>marker' + decoded + '</h1>'
+    # Even a literal quote in HTML text cannot close the h1 element.
+    assert SourceTokens("<h1>marker'</h1>").tags == [('h1', {})]
+
+
+def test_negative_for_one_sink_does_not_resolve_a_separately_evidenced_dom_sink():
+    api = Probe(ReflectionContext.ENCODED)
+    dom = Probe(ReflectionContext.DOM_BASED, dom_sink_path_plausible=True)
+    assert classify_xss_outcome(api) == Outcome.NOT_CONFIRMED
+    assert classify_xss_outcome(dom) == Outcome.BROWSER_REQUIRED
+
+
+def test_already_captured_equivalent_variants_do_not_require_payload_exhaustion():
+    # Existing observations for the same literal-escape hypothesis, not requests
+    # that the Agent must issue. Changing a marker adds no discriminating result.
+    for marker in (731942, 842053):
+        submitted = f"';document.title={marker};//"
+        transformed = submitted.replace("'", "\\'")
+        effective = "const value='" + transformed + "';"
+        assert check_js_syntax(effective).returncode == 0
+        assert effective.startswith(r"const value='\';document.title=")
+    bounded = Probe(ReflectionContext.JS_STRING, payload_reflected_unescaped=False,
+                    bounded_test_complete=True, other_hypotheses_pending=False)
+    assert classify_xss_outcome(bounded) == Outcome.NOT_CONFIRMED

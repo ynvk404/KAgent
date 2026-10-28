@@ -15,9 +15,9 @@
 #     JavaScript when the returned context supports it. The safety property they carry
 #     is that the *action* performed is harmless and self-contained
 #     (setting document.title to a known value), not that they avoid
-#     running code. Use only the entry matching the context you actually
-#     observed in Phase 1 — do not try every context's entry against one
-#     candidate.
+#     running code. Select or adapt an example for the observed parser path,
+#     including only evidenced transitions — do not try every context's entry
+#     against one candidate.
 #
 # There is no Phase 3 or Phase 4 in this file. Stored XSS and DOM-based
 # XSS are not separate payload categories. Stored probes use the Phase 2 entry
@@ -29,9 +29,9 @@
 #
 # No browser-execution capability is available in the current runtime.
 # Phase 2 markers establish an execution *hypothesis* from HTTP-level or
-# source/sink evidence. When that evidence is not deterministic (e.g. a
-# JS-string break-out, or a DOM sink whose actual execution can't be
-# observed), SKILL.md requires recording `browser-required`
+# source/sink evidence. Reassess useful HTTP discriminators before stopping.
+# When the remaining necessary fact requires unavailable browser execution,
+# SKILL.md requires recording `browser-required`
 # and stopping — do not attempt to simulate or infer browser execution
 # using shell, http, or any other substitute for an actual browser.
 #
@@ -49,7 +49,8 @@
 # investigates transformations, not execution. Reuse adequate
 # existing observations. Use the metacharacter probe only when encoding or
 # transformation uncertainty remains; no extra detection request is required
-# when adequate evidence already exists. Select the observed context's Phase 2 entry.
+# when adequate evidence already exists. Select Phase 2 examples for the observed
+# context or an evidenced parser transition.
 
 xsspoc{TIMESTAMP}                     # purpose: baseline marker with no special characters | applies: propagation/context not yet established by adequate observations | limit: establishes propagation only, not encoding or execution
 xsspoc{TIMESTAMP}"'<>                 # purpose: marker followed by the four characters most output-encoding schemes transform (", ', <, >) | applies: unresolved encoding/transformation uncertainty | limit: observe which characters survive unescaped; still not an execution attempt
@@ -76,6 +77,11 @@ xsspoc{TIMESTAMP}"'<>                 # purpose: marker followed by the four cha
 # sanitization and truncation. Propagation, reflection, neutralized output,
 # potentially executable syntax and observed execution are different facts;
 # absence of HTML encoding is not confirmed execution.
+# Follow SKILL.md's parser path before selecting an example: locate each relevant
+# reflection, identify outer/inner parsers, analyze transformations, predict a
+# distinguishing probe and compare it with a benign control. Include backslash or
+# another delimiter only when its handling is unresolved; no fixed character set
+# or payload order is required. One escaped occurrence does not settle another.
 
 # ============================================================================
 # ============== PHASE 2 — CONTEXT-SPECIFIC CONFIRMATION =====================
@@ -89,6 +95,37 @@ xsspoc{TIMESTAMP}"'<>                 # purpose: marker followed by the four cha
 # inert elements and CSP, under SKILL.md steps 3/5. Deterministic HTTP proof remains
 # sufficient when those conditions hold; missing necessary browser proof remains
 # browser-required. Intended request syntax cannot replace captured response bytes.
+# Each example is a hypothesis, not proof: apply SKILL.md step 3's returned-code
+# checkpoint after every response and before a result. Trace submitted input ->
+# actual returned bytes -> parser context -> effective code -> syntax/trigger
+# assessment -> evidence decision. HTML breakout, valid JS, exploitability evidence
+# and observed browser execution are separate facts. Keep surviving backslashes
+# after HTML parsing/attribute decoding; do not unescape JavaScript source by hand.
+# For example, returned document.title=\'sample\' is invalid JS even inside a newly
+# formed script or handler. Changing the enclosing tag does not fix that expression.
+# After a proven parser transition, model the new context independently: surviving
+# transformations still apply, but the previous context's delimiter requirement
+# does not. Consider simplifying the harmless expression before abandoning the path.
+# Predict both the supporting observation and its falsifier; a changed marker alone
+# adds no information. Optional worked contrasts: read_payloads with
+# file="context-reasoning.md"; the decision/evidence rules remain in SKILL.md.
+# Diagnose the exact transformation before choosing a justified adaptation; predict
+# its returned structure, effective code and confirmation conditions, then inspect
+# the new observation in full context. A quote-free marker can fit observed quote
+# escaping, but is not a universal strategy. Syntax-only checks are not execution.
+# Keep failed variants as adverse evidence; one failure does not rule out other
+# supported hypotheses. Stop honestly when no useful authorized test remains.
+# Apply reassessment to valid but inert code and neutralized/inconclusive output
+# too, not only syntax errors. In existing assessment/notes distinguish the tested
+# hypothesis, predicted/actual result, ruled-out cases and essential supported
+# alternatives. Continue a useful permitted discriminating test within budget
+# without asking the user to repeat the goal; equivalent variants need no spraying.
+# Browser absence alone does not rule out a useful HTTP question. A bounded
+# negative needs that scope's essential hypotheses resolved; limits with questions
+# still open require an honest unresolved outcome (SKILL.md steps 3/5).
+# Keep raw excerpts in the retained observation representation, including entities
+# and backslashes. Label decoded analytical representations separately; neither
+# an intended input nor a reconstructed response is new evidence.
 # text/html fragments need no html/body wrappers. Raw reflection alone is
 # not complete executable proof. If evidence shows deterministic removal of
 # one trailing character, a grounded same-context adaptation can test it:
@@ -134,6 +171,17 @@ xsspoc{TIMESTAMP}"'<>                 # purpose: marker followed by the four cha
     # limit: tests that boundary, not every quote variant; enclosing context, policy and SKILL.md's deterministic proof conditions still apply
 
 # --- JavaScript string context -------------------------------------------
+# Distinguish inline HTML script data, external JavaScript, event-handler values
+# and DOM consumers before adapting these JS-literal examples (SKILL.md step 2).
+# JS quote/backslash escaping does not settle an evidenced enclosing HTML boundary;
+# an appropriate script end tag in inline HTML can change parsing without closing
+# the JS literal. It has no such role inside an external JS string. Inspect script
+# type, actual tokenizer state, suffix, filtering/encoding and any later consumer.
+# Select only a supported boundary; an inert structural control can test it first.
+# If an execution marker's own quotes would be transformed, a quote-free equivalent
+# may assign a fresh decimal integer to document.title; record its exact expected
+# title string. Structural injection or syntax acceptance is not observed execution;
+# apply unchanged SKILL.md steps 3/5, including browser-required when needed.
 ';document.title='xsspoc-{MARKER}';//
     # purpose: break out of a single-quoted JS string literal, then execute
     # applies: marker in Phase 1 rendered inside a JS string (e.g. var x = 'MARKER';)

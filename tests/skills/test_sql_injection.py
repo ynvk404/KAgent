@@ -932,7 +932,9 @@ def test_boolean_checkpoint_preserves_context_uncertainty_and_bounded_outcomes(s
         'or tests may use a nonmatching seed', 'surrounding prefix/suffix',
         'trailing `%`', 'cease to be true', 'new discriminating test',
         'authorized within runtime/operator limits', 'specific stability/repetition',
-        'unfinished or unsupported context/proof stays unresolved',
+        'uninterpretable testing or unavailable proof stays unresolved',
+        'negative-assessment criteria', 'no boolean differential',
+        'bounded negative from an inconclusive comparison',
         'completed bounded negative', 'do not force another technique',
     ):
         assert rule in section

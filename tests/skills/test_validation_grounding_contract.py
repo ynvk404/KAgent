@@ -153,8 +153,17 @@ async def test_xss_early_checkpoint_grounds_adaptation_and_optional_detection(sk
                     'no numeric variant cap', 'redundant equivalent', 'payload spraying',
                     'no corpus exhaustion or minimum variants', 'evidence is sufficient',
                     'adequately ruled out', 'no useful authorized test remains', 'execution is blocked',
-                    'runtime/operator limits', 'browser-required'):
+                    'runtime/operator limits', 'browser-required',
+                    'a failed technique does not close its candidate',
+                    'essential supported alternative has a useful permitted test',
+                    'continue without asking to repeat the goal',
+                    'state the actual stop reason', 'unresolved work needs its honest outcome',
+                    'browser absence alone does not settle a useful http question',
+                    "before `record_result`, apply step 3's returned-code and hypothesis checkpoints"):
         assert concept in checkpoint
+    # Editorial compactness guard introduced in ac636377, not a runtime/context
+    # limit. Keep the decision rules above here; detail in step 3 is loaded in
+    # the same playbook, with delivery checked at record_result in Agent tests.
     assert len(checkpoint) < 1800
 
 
@@ -219,7 +228,10 @@ async def test_source_first_handoff_preserves_request_and_operator_distinctions(
 async def test_loaded_reasoning_allows_existing_ambiguous_evidence_without_inventing_proof(skills, name):
     loaded = ' '.join((await LoadSkillTool(skills).run({'name': name})).split()).lower()
     checkpoint = loaded.split('## decision checkpoint', 1)[1].split('## runtime completion contract', 1)[0]
-    assert 'observe → hypothesize → discriminate → predict → execute → interpret → reassess → decide' in checkpoint
+    flow = ('observe → model context → form hypotheses → predict → probe → interpret → adapt → reassess → decide'
+            if name == 'cross-site-scripting' else
+            'observe → hypothesize → discriminate → predict → execute → interpret → reassess → decide')
+    assert flow in checkpoint
     assert 'ambiguous existing observations' in checkpoint
     assert 'competing hypotheses' in checkpoint
     assert 'browser-required' in loaded and 'insufficient-evidence' in loaded

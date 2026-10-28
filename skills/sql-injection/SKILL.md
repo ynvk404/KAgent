@@ -1,7 +1,7 @@
 ---
 name: sql-injection
 description: >
-  Confirm or rule out SQL injection for a specific candidate produced by
+  Assess SQL injection for a specific candidate produced by
   `web-input-analysis`, using the minimum non-destructive evidence needed
   to demonstrate the vulnerability, and — only with explicit user
   authorization after SQL injection is confirmed — optionally validate
@@ -129,7 +129,8 @@ or full query reconstruction is required.
 
 Stop when evidence is sufficient, the relevant hypothesis is adequately ruled
 out, no useful authorized test remains, or execution is blocked by runtime,
-operator or capability limits. If the oracle/context remains unresolved, submit
+operator or capability limits. If missing observations or unresolved test relevance
+prevent meeting the negative-assessment criteria below, submit
 `insufficient-evidence` with the actual observations, hypotheses tested, remaining
 uncertainty and real stop reason. Use another technique only for a distinct
 evidence-supported plan within the existing bounds. Do not spend finalization
@@ -320,14 +321,30 @@ When complete, correctly owned sources already meet this playbook's evidence
 contract, prioritize proof registration → result submission → required finding
 persistence. Probe again only for an identified missing validation step.
 
-For `not-confirmed`, the Runtime requires `assessment.oracle_status: established`
+**Negative-assessment criteria.** For `not-confirmed`, the Runtime requires
+`assessment.oracle_status: established`
 and an observation-grounded `assessment.oracle_basis` explaining why the selected
-test is applicable and interpretable. These are your assessment, not Runtime SQL
-verification. A baseline alone does not establish a completed bounded negative;
-assess the actual test, context and oracle rather than counting request variants.
-Unknown/inconclusive compatibility stays unresolved; reassess the
-strategy within existing bounds rather than filling a Boolean pair or cycling
-techniques. The Runtime imposes no technique order.
+tests are relevant and interpretable within the declared scope. Established means
+an observation mechanism: correct input targeting, benign controls showing that
+the application processes that input, and usable response/status/timing evidence
+capable of revealing the tested behavior. It does not require a positive SQLi
+oracle or proof that an injected SQL predicate executed. These are your assessment,
+not Runtime SQL verification.
+
+Adequate, relevant testing without a SQLi signal supports a bounded negative,
+not proof of absolute safety. Exact server-side SQL or syntax context is not
+required: justify test relevance from observed input handling and supported
+hypotheses, and state coverage and limitations in `oracle_basis` / `limitations`.
+For example, matching and nonmatching benign inputs can establish a row-presence
+observation mechanism; relevant quote/predicate tests may then remain unchanged
+without proving that SQL evaluated those predicates.
+A baseline alone or a few generic payloads with unchanged responses is insufficient.
+Malformed or irrelevant probes, weak controls, unobservable effects, incomplete
+testing, or unresolved parser sensitivity require `insufficient-evidence` when
+they prevent this assessment. An inapplicable technique is a limitation, not
+automatically a verdict on the whole bounded scope. No universal payload count,
+every-technique requirement or Finding is needed; the Runtime imposes no
+technique order.
 
 For a boolean-based confirmed result under this playbook, include structured
 `confirmation` evidence. Use `kind: boolean-differential`, one shared
@@ -664,8 +681,9 @@ the validation question and capture any necessary benign control in the active
 attempt, unless a suitable owned control already exists. Pre-attempt responses
 inform planning only; do not adopt/rebind them as owned proof. Taking a needed
 control for a missing validation step is distinct from resending traffic to repair
-a manifest or retrieve an omitted body. A matching seed, a predicate that retains
-its intended truth value, and an observable response oracle are separate prerequisites.
+a manifest or retrieve an omitted body. For an AND-filter test, a matching seed,
+a predicate that retains its intended truth value, and an observable response
+oracle are separate prerequisites.
 
 **General rule: preserve the original request structure, and modify only
 the candidate input.** This applies regardless of method or content type —
@@ -906,8 +924,10 @@ position/type hypothesis; send another probe only when it tests a materially
 different prediction. A different parser token alone is not a controlled
 error-based oracle. Switch to another supported technique only with its own
 context, control, observable criterion and falsifier; do not run a Boolean pair,
-UNION or timing probe merely to fill a checklist. Unknown context/oracle stays
-`insufficient-evidence`, not `confirmed` or a completed `not-confirmed`.
+UNION or timing probe merely to fill a checklist. If missing context or observations
+make the tests uninterpretable, use `insufficient-evidence`. Unknown exact syntax
+alone does not prevent a completed `not-confirmed` under the negative-assessment
+criteria; it does not relax any `confirmed` proof requirement.
 
 Apply the evidence-to-decision checkpoint in "Recording the result" before
 submitting confirmation, whatever technique supplies the proof.
@@ -969,7 +989,8 @@ for all three. That status alone establishes neither parsing nor predicate truth
   existing observations; this is not a mandatory extra request for compatible pairs.
 - HTTP 200 with identical TRUE/FALSE bodies does not prove that either predicate
   was evaluated as intended. If the seed/oracle is not established, the equal
-  pair remains unresolved rather than automatically becoming a completed negative.
+  pair remains unresolved as a comparison rather than automatically becoming
+  a completed negative.
   `data:[]` does not prove the whole payload was treated as literal text or that
   the evaluator ran its predicate. Parser errors establish parser sensitivity.
 - Do not force a FALSE request while compatibility remains unresolved merely to
@@ -994,15 +1015,17 @@ member of the pair. A comment-only breakout that truncates the remainder of a
 query is not, by itself, a boolean differential. Record both members of both
 repetitions in the structured `confirmation` object passed to
 `workflow(action="record_result", ...)`. If the paired observations are equal,
-record that 2a was inconclusive; never preserve a signal claiming they differed.
+record no Boolean differential; use the pair checkpoint and negative-assessment
+criteria to distinguish a bounded negative from an inconclusive comparison.
+Never preserve a signal claiming they differed.
 Identify whether the seed/oracle, predicate compatibility or another prerequisite
 is unresolved. Continue only when a new discriminating test is useful and
 authorized within runtime/operator limits. Do not repeat
 an effective request without a specific stability/repetition or missing-validation
 reason. Identical bodies/ETags alone do not establish caching or quote rewriting.
 If no useful bounded test remains, apply the outcome rules below: unfinished or
-unsupported context/proof stays unresolved; a completed bounded negative needs
-usable observations and registered proof. Do not force another technique.
+uninterpretable testing or unavailable proof stays unresolved; a completed bounded
+negative needs usable observations and registered proof. Do not force another technique.
 Likewise, a successful `UNION SELECT` response compared with a syntax error or
 missing-table error is not a boolean TRUE/FALSE pair. Describe that observation
 as a bounded union/error differential; do not label it boolean-based or invent
@@ -1201,13 +1224,12 @@ and submit insufficient-evidence if it is insufficient. Do not generate fresh
 probes just to repair the manifest; continue validation only for a separately
 identified missing validation step.
 
-If the applicable, context-compatible bounded Phase 2 tests complete with an
-established oracle but without a clear, repeatable
+If the negative-assessment criteria are met without a clear, repeatable SQLi
 signal — including when 2d was unavailable and therefore not attempted — record
-`not-confirmed` with usable primary evidence and registered proof. This is a
-bounded negative result, not proof that the endpoint has no SQL injection.
-An unresolved oracle or predicate compatibility remains `insufficient-evidence`,
-even when all captures are complete.
+`not-confirmed` with usable primary evidence and registered proof. Missing exact
+syntax or proof of predicate execution alone does not make testing inconclusive.
+Missing observation sensitivity or unresolved test relevance does, even when
+all captures are complete.
 If testing is blocked, unfinished, or its required sources/proof are unavailable,
 use the corresponding unresolved outcome below rather than forcing a terminal
 assessment or escalating technique/payload variety.
@@ -1257,11 +1279,11 @@ have different meanings:
 
 - `confirmed` with `SQLI-2` in `techniques` — an applicable technique actually available in this environment (boolean, error-based, bounded UNION-based, time-based, or OOB only when its capability and authorization gates pass) produced a clear, repeatable positive signal, bounded per "Bound the proof" above;
 - `confirmed` with `SQLI-3` in `techniques` — SQLI-2 plus a minimal, authorized impact probe from Phase 3 succeeded;
-- `not-confirmed` — applicable, context-compatible bounded tests completed with an established oracle and none produced a clear, repeatable SQL injection signal. This does not mean every technique must be run. Unresolved predicate compatibility or syntax context requires `insufficient-evidence`; the number of syntax changes does not complete a negative test. OOB is included only when its capability check passed and the user authorized it;
+- `not-confirmed` — adequate, relevant testing did not confirm SQLi within the declared bounded scope, under the negative-assessment criteria above; this is not proof of absolute safety. This does not mean every technique must be run. Unchanged responses can support this outcome with justified test relevance and controls, without exact SQL syntax or proven predicate execution; payload variety alone is insufficient. OOB is included only when its capability check passed and the user authorized it;
 - `blocked` — a probe was intercepted by a WAF, rate-limiter, or challenge page before reaching the application (step 2c); the application itself was never actually tested;
 - `deferred` — work is postponed, or behavior indicates NoSQL/operator injection
   rather than SQL injection (per Scope, above); put the reason in `deferred_reason`;
-- `insufficient-evidence` — the oracle, predicate compatibility or necessary context remains unresolved, or required sources or reproducible proof are unavailable;
+- `insufficient-evidence` — malformed, irrelevant, weakly controlled, unobservable or incomplete testing prevents a defensible assessment, unresolved parser sensitivity remains, or required sources or reproducible proof are unavailable;
   explain the limitation. This closes the attempt as unresolved, without claiming
   a negative test or completed validation.
 
@@ -1303,10 +1325,13 @@ establish these five points from the recorded evidence:
 
 - State the observed statement shape and input position (or supported
   uncertainty), using `injection_context` / `notes`.
-- Explain compatibility between that context and the selected technique,
-  including how evaluation would be observable. Reconsider identical
-  expression-type failures rather than attributing them to controlled evaluation.
-- Identify the actual observed effect supporting the claimed technique.
+- Explain test relevance and controls under the negative-assessment criteria
+  for a negative; for confirmation, explain compatibility between that context
+  and the selected technique, including how evaluation would be observable.
+  Reconsider identical expression-type failures rather than attributing them
+  to controlled evaluation.
+- Identify the actual observed effect, or lack of a signal, supporting the
+  claimed technique.
   Distinguish syntax sensitivity (SQLI-1), a plausible candidate, and confirmed
   SQLI-2: repeated malformed syntax errors or different parser messages alone
   do not establish SQLI-2. Error-based proof must show response characteristics
@@ -1341,9 +1366,10 @@ Counterexample: TRUE and FALSE both return HTTP 200 with
 - **Observed facts:** equal empty responses and syntax errors; no boolean differential.
 - **Working hypothesis:** a wildcard, quote, parenthesis or suffix may explain
   the responses; none establishes the full query shape or predicate evaluation.
-- **Unresolved limitation:** the oracle is not established and controlled SQL
-  evaluation is unproved. Record `insufficient-evidence` when no useful bounded
-  test remains; do not turn this into SQLI-2 or a completed negative.
+- **Unresolved limitation:** empty controls and rejected syntax leave test relevance
+  and observation sensitivity unestablished; controlled SQL evaluation is unproved.
+  These tests are uninterpretable. Record `insufficient-evidence` when no useful
+  bounded test remains; do not turn this into SQLI-2 or a completed negative.
 
 Recheck mutation/cleanup bookkeeping for the entire attempt, including
 baseline successful-write acknowledgements, under the state-changing endpoint

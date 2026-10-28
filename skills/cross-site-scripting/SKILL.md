@@ -61,26 +61,27 @@ or recovery allowances.
 
 ## Decision checkpoint — before a probe and after its response
 
-**Observe → Hypothesize → Discriminate → Predict → Execute → Interpret → Reassess → Decide.**
-Identify the input source, output/DOM sink, execution context and observed
+**Observe → Model Context → Form Hypotheses → Predict → Probe → Interpret → Adapt → Reassess → Decide.**
+Model the input source, output/DOM sink, execution context and observed
 transformations. Separate reflection, neutralization and execution evidence.
-Use existing adequate observations; choose a minimally necessary, harmless,
-context-appropriate test only for an unresolved question with a discriminating
-prediction. A metacharacter detection request is useful only when encoding or
-transformation uncertainty remains; do not require it when evidence already
-answers that question.
+After each response and before `record_result`, apply step 3's returned-code and
+hypothesis checkpoints. Preserve effective code and decisions in assessment/proof.
+Reuse adequate observations. A harmless context-appropriate test needs a
+discriminating prediction; metacharacter detection helps only with unresolved
+encoding or transformation uncertainty.
 
-Use ambiguous existing observations to form competing hypotheses and a
-discriminating prediction; no new HTTP observation is needed merely to reconsider
-them. After the response, compare it with the prediction. Continue a justified
-adaptation, even after a prior close variant. There is no numeric variant cap;
-avoid redundant equivalent variants and unproductive payload spraying. One inconclusive observation does not
-rule out all useful hypotheses. The LLM decides whether further investigation is
-worthwhile within scope, permissions and runtime/operator limits; no corpus
-exhaustion or minimum variants are required. Stop when evidence is sufficient,
-the relevant hypothesis is adequately ruled out, no useful authorized test remains,
-or execution is blocked. Apply the existing outcome rules; reflection alone is
-not execution, and missing necessary browser evidence remains `browser-required`.
+Use ambiguous existing observations to form competing hypotheses; no new HTTP
+observation is needed merely to reconsider them. Compare results with predictions.
+Continue a justified adaptation, even after a prior close variant. There is no numeric variant cap;
+avoid redundant equivalent variants and payload spraying. A failed technique does
+not close its Candidate while an essential supported alternative has a useful
+permitted test within scope, permissions and runtime/operator limits. Continue
+without asking to repeat the goal; no corpus exhaustion or minimum variants are
+required. Stop when evidence is sufficient, the bounded hypothesis is adequately
+ruled out, no useful authorized test remains, or execution is blocked. State the
+actual stop reason; unresolved work needs its honest outcome. Missing necessary
+browser proof remains `browser-required`; browser absence alone does not settle
+a useful HTTP question. See step 3 before deciding to end validation.
 
 ## Runtime completion contract
 
@@ -235,8 +236,8 @@ only after the evidence meets step 5's confirmed threshold (see step 6).
 evidence that the payload is exploitable in the observed context, using the
 minimum payload needed — not to explore every possible bypass or build a
 persistent exploit chain — or record a clear negative, blocked, or
-unconfirmable result. Then record the result and stop. This skill produces
-evidence, not a final finding.
+unconfirmable result. Then record the result and stop. Only `confirm_finding`
+turns an accepted confirmed assessment into a tracked finding.
 
 ## Workflow at a glance
 
@@ -254,7 +255,8 @@ Context-specific
 confirmation          — harmless execution marker matched to the observed context
         ↓
 (if HTTP/source evidence is not deterministic)
-browser-required — recorded and stopped, not escalated
+Reassess whether a useful HTTP discriminator remains; otherwise record
+browser-required when the missing fact requires unavailable browser execution.
 ```
 
 **The current XSS validator has no optional impact phase analogous to
@@ -267,8 +269,8 @@ ask ask_user to name the Candidate, exact lab target/context, synthetic
 subject and single action, data/state bound, and risk tier. Proceed only with
 that specific approval and an exact-action runtime permission gate that
 /yolo cannot bypass; request fresh approval for a higher tier. The current
-runtime has no browser-execution capability, so if the check depends on
-browser behavior, record browser-required and stop rather than simulate it.
+runtime has no browser-execution capability; apply the capability and proof
+rules below.
 
 Prefer the built-in `http` tool with `phase: validation` for harmless marker
 probes. Use `curl` only when the native tool cannot express a necessary
@@ -278,13 +280,10 @@ generators — this skill works from one candidate at a time with a small,
 targeted payload set, not brute-force fuzzing.
 
 **No browser-execution capability is available in the current runtime.**
-When a candidate's evidence depends on actual browser execution (see
-`browser-required` below), record that outcome and stop — do
-not attempt to simulate or infer browser execution using `shell`, `http`,
-or any other substitute. This mirrors how `sql-injection` treats its
-OOB-confirmation capability gate: an unavailable capability is a reason to
-record the honest limits of what was tested, not a reason to improvise a
-workaround.
+When the remaining necessary fact requires browser execution, record
+`browser-required` and stop; do not attempt to simulate or infer browser execution
+using `shell`, `http`, or any substitute. This does not prevent useful HTTP context
+tests or step 3's deterministic HTTP proof of exploitability.
 
 Execution rule: substitute the real target and real parameter values before
 running commands. Never write literal placeholder payloads such as
@@ -315,8 +314,8 @@ it against a context it doesn't match. In particular:
   existing refusal/stop behavior; do not switch tools or paths to bypass it.
 - Use `read_payloads(skill="cross-site-scripting", file="payloads.txt")`
   and select only the `PHASE 1 — CONTEXT DETECTION` block for step 2
-  below, and only the `PHASE 2 — CONTEXT-SPECIFIC CONFIRMATION` entry that
-  matches the context you actually observed for step 3.
+  below. For step 3, select or adapt `PHASE 2 — CONTEXT-SPECIFIC CONFIRMATION`
+  examples for the observed context and any evidenced parser transition.
 - Do not read the whole file and try every context's payload against a
   candidate "to see what sticks" — that is the fuzzing behavior this skill
   explicitly avoids.
@@ -385,6 +384,23 @@ Work one candidate at a time. Don't run confirmation probes against every
 for the first — finish, record, then move to the next.
 
 ## 2. Determine the reflection context precisely
+
+**Locate reflection → Identify context → Identify parser boundaries → Analyze
+transformations → Select probe → Compare responses → Evaluate evidence.**
+For each relevant occurrence of this candidate's input, retain the response type,
+surrounding prefix/suffix and enclosing element/attribute or script type/loading
+mode. One input can reach several contexts; a neutralized occurrence does not
+settle another. Separate the outer response parser from the inner language context.
+
+Model only evidenced layers: submitted value → encoded request → server/template
+transformations → returned representation → relevant parser/DOM consumer. Request
+URL/form decoding, HTML entities, JS escapes and later client decoding are different
+operations; do not assume a second decode or a sanitizer's implementation from one
+output. Mark uncertain layers as hypotheses. Add layers only when observations
+make them relevant, rather than performing every encoding check for every Candidate.
+Verify method, input binding, session and response identity before treating a missing
+reflection as neutralization; a redirect/login page or wrong source is an invalid
+comparison, not a negative XSS test.
 
 The correct proof payload depends entirely on where the value lands. Reuse
 adequate existing observations. If propagation or context remains unresolved,
@@ -488,98 +504,162 @@ deterministic. More context-sensitive cases (JS string break-out, DOM
 sinks) may require browser-level confirmation — see step 3's interpretation
 guidance and the outcome definitions in step 5.
 
+**Parser boundaries — outer to inner.** Derive this path from captured source;
+the label `js-string` alone does not identify the enclosing parser:
+
+| Observed placement | Parser path and boundary to assess | Limit / falsifier |
+|---|---|---|
+| HTML text / attribute | HTML tokenization; an attribute's delimiter precedes any decoded value or URL interpretation. | Character references become data, not new markup or attribute delimiters in that same pass. Inspect any evidenced later consumer separately. |
+| Inline script, including a JS string or template literal | HTML script-data tokenization → JS lexing for an executable script type; distinguish quote, backtick/interpolation and enclosing element boundaries. | JS quote/backslash escaping can block a literal breakout without neutralizing the enclosing HTML boundary. A non-executable script type is not execution proof. |
+| External JavaScript loaded as script | JS lexing of the fetched resource, without an enclosing HTML script-data parser for its body. | An HTML end tag inside its JS string does not close the loading page's script element. Verify loading/consumer evidence; do not invent a loader. |
+| Event-handler attribute | HTML attribute tokenization → character-reference decoding → JS handler parsing. | Decoded quotes can affect JS without closing the HTML attribute; execution still needs its actual trigger and policy. |
+| JSON response / embedded data block | Standalone JSON is data without an evidenced execution sink. A data block in an HTML script element still has an outer HTML boundary. | JSON parsing/readback is not execution. Trace any observed later consumer; do not transfer a JSON API assessment to a separate sink. |
+| DOM sink | Observed source → transformations → insertion/evaluation API → that API's parser. | `textContent`, HTML fragment insertion and JS evaluation differ; a source path or inserted script tag alone is not observed execution. |
+
+For a `text/html` inline script, an appropriate literal `</script>` end tag can
+terminate the element even inside a JS string, template literal or comment.
+Inspect the actual opening element, script type, surrounding tokenizer state and
+suffix: HTML script escaped/double-escaped states can change that interpretation.
+Do not infer a boundary from a substring alone. In script data, `&lt;` is not
+HTML-decoded into `<`; JS source `\u003C` or `<\/script>` likewise is not a literal
+HTML end tag. Decoding JS string values yourself must not invent an earlier HTML
+delimiter. A later evidenced reparse is a separate source-to-sink question.
+
+Choose a probe only for a remaining boundary/transform hypothesis. Compare a
+benign control with a minimal change to the uncertain delimiter or escape character
+(including backslash), predicting returned structure before sending. An inert
+structural marker can distinguish parsers without attempting execution. Compare
+complete responses under the same request/session conditions; rule out only the
+hypothesis whose required boundary is neutralized there. Filtering, a syntax error
+or one escaped payload does not rule out other supported boundaries. Unresolved
+transformations/consumer context remain `insufficient-evidence`; valid injection
+with a necessary unobserved browser step remains `browser-required` under step 3.
+
 ### Context traces — synthetic source and responses, not session evidence
 
-**Attribute boundaries.** An excerpt locates the marker in an attribute but leaves
-its delimiter ambiguous. Competing double/single/unquoted hypotheses predict
-different parses; an inert boundary test can distinguish them. A failed quote
-probe does not settle the others. Use the delimiter directly when known.
-Prefix + submitted input + suffix, with simulated complete returned tags:
-
-| Source template | Submitted input | Returned tag / interpretation |
-|---|---|---|
-| `<input value="{input}" data-tail="t">` | `m" data-probe="yes` | `<input value="m" data-probe="yes" data-tail="t">`: new attribute, not execution. |
-| `<input value='{input}' data-tail='t'>` | `m' data-probe='yes` | `<input value='m' data-probe='yes' data-tail='t'>`: matching single quote. |
-| `<input value={input} data-tail=t>` | `m data-probe=yes` | `<input value=m data-probe=yes data-tail=t>`: whitespace ends the value. |
-| `<input value="{input}" data-tail="t">` | `m&quot; data-probe=&quot;yes` | `<input value="m&quot; data-probe=&quot;yes" data-tail="t">`: decoded quotes remain value data. |
-
-Raw `\"` is not an HTML quote escape. For the first template, the existing Phase 2
-input `"><script>document.title='xsspoc-demo7'</script>` would yield
-`<input value=""><script>document.title='xsspoc-demo7'</script>" data-tail="t">`.
-The suffix is outside the completed script; predict this structure, then inspect
-actual bytes and enclosing context under step 3, not just the attribute breakout.
-
-**JavaScript boundaries.** For hypothesized source `const value='{input}';`, the
-corpus quote-based marker predicts breakout if unescaped, string data if escaped.
-Contrast simulated returned source, including the application's suffix:
-
-```javascript
-// Single-quoted breakout
-const single='';document.title='xsspoc-demo7';//';
-// Double-quoted breakout
-const double="";document.title='xsspoc-demo7';//";
-// Escaped quotes: marker text stays in the string
-const escaped='\';document.title=\'xsspoc-demo7\';//';
-// Quote-based input does not leave a template literal
-const template=`';document.title='xsspoc-demo7';//`;
-// Template interpolation is a different expression boundary
-const interpolation=`${7 * 7}`;
-```
-
-Predict whether adjacent quotes/backslashes close the literal and whether `//`
-consumes the suffix only to the next newline. Literal LF/CR, the two bytes `\n`,
-backslash + physical newline and template newlines have different grammar. A
-parse error rejects that assembly, not all JS hypotheses; test unresolved escaping
-or delimiters from existing source. Acceptance or an unobserved computation is
-not execution; apply step 3's deterministic-proof exception or `browser-required`.
-
-**Nested parsers.** Submitted `x');document.title='xsspoc-demo7';//` could return as
-`<button onclick="show('x&#39;);document.title=&#39;xsspoc-demo7&#39;;//')">go</button>`.
-HTML decoding yields `show('x');document.title='xsspoc-demo7';//')`: encoding
-did not neutralize that JS quote. Inspect decoded escaping and the trigger;
-HTTP does not observe the click: `browser-required`. Similarly,
-`<a href="javascript:document.title=&#39;xsspoc-demo7&#39;">go</a>` retains its scheme
-after HTML decoding; inspect element, policy and navigation. Encoded URL text
-alone does not establish percent/double decoding.
-
-**Enclosing contexts.** Given inert `m`, compare enclosing source before Phase 2:
-
-| Hypothetical output | Prediction → decision |
-|---|---|
-| `<p>m</p>` vs `<!--m-->` | HTML text vs comment data; test a compatible comment close only if justified. A script string inside the comment stays data. |
-| `<textarea>m</textarea>` / `<title>m</title>` | `<script>` stays text; a matching enclosing end tag changes parsing. Inspect that boundary before claiming breakout. |
-| `<template>m</template>` | Parsed contents are inert; later instantiation needs an evidenced path and execution assessment. |
-| `<div style="color:m">` / `<style>p{color:m}</style>` | CSS is not JS; attribute quote/tag vs style end tag are distinct HTML breakout hypotheses. Inspect their suffixes. |
-
-**Transformations: submitted input → simulated observed output → hypothesis → next decision.**
-These examples assume complete captures; none establishes a universal sanitizer:
-
-| Submitted input | Observed output | Interpretation and next decision |
-|---|---|---|
-| `<b>m</b>` | `&lt;b&gt;m&lt;/b&gt;` in HTML text | Data here; inspect evidenced later decoding/parsers before generalizing safety. |
-| `'` | `\'` in JS source | Escape inserted; inspect adjacent backslashes, quote and newline. |
-| `<script>m</script><b>m</b>` | `<b>m</b>` | Plausible script removal; surviving markup is not execution. Select a distinct context-supported test. |
-| `<img src=x onerror="document.title='xsspoc-demo7'">` | `<img src=x>` | Handler removed; this trigger is neutralized. Do not try arbitrary event names. |
-| `<b>m</b>` | `<b>m</b` | Complete capture: possible end-character removal; compare captures and consider step 3's compensating test. If capture is truncated, the missing bytes are unknown. |
-| `javascript%3Adocument.title=1` | Same text in `href` | No percent-decode evidenced here; inspect URL handling before inferring another decode. |
-
+Optional worked contrasts are available through
+`read_payloads(skill="cross-site-scripting", file="context-reasoning.md")`.
+Consult the relevant contrast only when it helps resolve the current parser or
+transformation question; no extra resource read or example sequence is required.
 Use only captured bytes for incomplete observations; name missing context, never
 reconstruct it or use an inadmissible capture as terminal proof. Earlier phases'
 observations can guide planning but do not become owned proof for this attempt.
-Parsing references: [HTML tokenizer](https://html.spec.whatwg.org/multipage/parsing.html#tokenization),
-[template contents](https://html.spec.whatwg.org/multipage/scripting.html#the-template-element),
-[ECMAScript literals](https://tc39.es/ecma262/multipage/ecmascript-language-lexical-grammar.html#sec-literals).
 
 ## 3. Confirm with the minimum payload for that context
 
-Use the **execution marker** from `payloads.txt`'s
-`PHASE 2 — CONTEXT-SPECIFIC CONFIRMATION` section that matches the context
-observed in step 2 — and only that section's entry for that context. Do
-not use a maximal bypass chain — one clear result per candidate is enough.
-Call it what it is: this payload does execute JavaScript (unlike the
-step-2 detection marker, which is inert text); the safety property it has
-is that the *action* it performs is harmless and self-contained
-(`document.title`), not that it avoids executing code.
+Select or adapt a harmless **execution marker** from `payloads.txt`'s
+`PHASE 2 — CONTEXT-SPECIFIC CONFIRMATION` examples for the observed context and
+supported parser transition. These are examples, not a fixed selection algorithm;
+compose only boundaries justified by captured syntax and transformations. Inspect
+the marker expression too: quote escaping can invalidate a newly introduced script.
+An equivalent quote-free marker may use a fresh decimal integer as `document.title`;
+record the exact expected title string. Do not use a maximal bypass chain; one
+result supported by sufficient evidence is enough for the Candidate.
+This is an attempt to execute JavaScript, unlike the inert step-2 detection
+marker. Its safety property is the harmless, self-contained action
+(`document.title`); whether it can execute depends on the returned code/context.
+
+For each chosen probe, state the hypothesis, expected observation if true, expected
+observation if false, and why that difference resolves a current uncertainty. A
+compact prediction in existing notes/proof suffices; no new workflow object is
+needed. Prefer an existing observation or a small inert structural test when it
+answers the question. If the alternatives predict the same visible result, choose
+a better discriminator or state the observation limit instead of sending variants.
+
+**Returned-code checkpoint — after a response, before a result.**
+
+**Submitted input → Actual returned bytes → Parser context → Effective code → Syntax/trigger assessment → Evidence decision.**
+
+1. Read the retained HTTP observation, including Content-Type, capture flags and
+   the relevant prefix/suffix. Compare the submitted input with actual returned
+   bytes for escaping, encoding, sanitization and filtering. Missing bytes remain
+   unknown; the intended payload cannot replace the response.
+2. Follow the evidenced parser path to the effective code the JavaScript parser
+   receives. HTML script-data parsing and JavaScript parsing are separate steps;
+   event-handler attributes undergo HTML character-reference decoding first.
+   Preserve backslashes that survive those steps. Do not manually unescape JS
+   source or invent another decoding pass. Include the complete script/handler
+   and relevant surrounding syntax, not just the marker expression.
+   Assess each resulting executable unit separately: a syntax error in the
+   terminated original script does not establish an error in a new script/handler.
+   Once a boundary is actually crossed, rebuild the context model for the new unit.
+   Carry forward transformations visible in its bytes, but do not carry the old
+   delimiter requirement into the new context. Before repairing the old literal or
+   abandoning the path, consider whether a simpler harmless expression avoids the
+   transformed syntax in that new context. This applies to any evidenced boundary,
+   not a particular delimiter or payload.
+3. Assess effective-code syntax, executable placement, trigger requirements and
+   enforced CSP/embedding restrictions separately. A new HTML element can exist
+   while its JavaScript is invalid. Invalid returned code cannot support
+   `confirmed`, even when the original boundary was crossed. An optional offline
+   syntax check establishes syntax only, never browser execution; no mandatory
+   checker or substitute browser capability is introduced by this checkpoint.
+4. Record a compact trace in the existing proof and assessment/notes: submitted
+   input, observation ID and returned excerpt, parser path, effective code,
+   syntax/trigger/policy assessment, and evidence decision. Distinguish structural
+   breakout, valid JavaScript, evidence of exploitability under this playbook,
+   and actually observed browser execution. Reconcile these same facts before
+   `record_result` and `confirm_finding`; do not replace transformed code with
+   its intended form in the report.
+
+**Before ending validation**, summarize in existing assessment/notes the tested
+hypothesis, predicted versus observed result with observation IDs, what was ruled
+out, and any essential distinct hypothesis still supported by observations. A
+failed payload or neutralized technique does not alone refute its whole Candidate.
+For a remaining hypothesis, identify a minimal non-destructive discriminating test
+and check scope, permission and remaining resources. If such a useful test is
+available, continue the owned attempt without asking the user to repeat the same
+goal; existing denials and operator limits still apply. If continuation is not
+possible or useful, record the actual stop reason and the matching unresolved or
+bounded negative outcome, not a negative merely to finish the turn.
+
+Distinct hypotheses predict different observable outcomes from evidenced context;
+equivalent variants add no information. Do not enumerate every payload or parser
+boundary. Minimum testing means minimal evidence, not minimal reasoning. Sufficient
+positive evidence needs no extra probes. A negative may close its bounded
+Candidate/sink/hypothesis only after the essential supported alternatives within
+that scope are resolved; it does not exclude other separately evidenced sinks.
+Keep the assigned scope fixed: do not narrow the original Candidate hypothesis
+after a failed technique just to declare `completed_attempt: true`.
+Follow the existing Candidate identity/association rules for a different sink.
+
+Synthetic returned-code contrasts (not target or browser-execution evidence):
+
+| Returned context | Effective code / decision |
+|---|---|
+| New inline script containing `document.title=\'proof\'` | The backslashes remain outside a JS string; invalid syntax, despite the new script element. |
+| Double-quoted handler attribute containing `document.title=\'proof\'` | HTML does not remove those backslashes; the handler has invalid JS syntax. |
+| Handler attribute containing `document.title=&#39;proof&#39;` | Attribute decoding yields `document.title='proof'`; valid syntax still needs its actual trigger and applicable policy. |
+| Returned marker expression `document.title=731942` | A possible quote-free adaptation when observed quote escaping justifies it; syntax alone does not establish execution. |
+
+After any non-confirming probe, including invalid syntax, valid but inert code,
+neutralized output or an inconclusive response, compare observation with prediction
+and reassess the supported hypotheses under the decision checkpoint. Classify the
+failure only as far as the observation supports; HTTP silence is not a diagnosis:
+
+| Observation / failure mechanism | What remains to resolve before deciding |
+|---|---|
+| Input absent or sink not reached | Check effective request, source/sink and response identity; distinguish an invalid comparison from a tested propagation failure. |
+| Encoded, escaped, sanitized or removed | Identify changed bytes at the relevant parser; rule out only the tested boundary/technique. |
+| Valid but inert data/code | Identify the containing literal, inert element, uncalled function or unreachable branch; syntax validity does not establish a runnable path. |
+| Boundary crossed, new code invalid | Preserve structural success; reassess the new context and simplify/adapt its expression before abandoning that hypothesis. |
+| Runnable structure, trigger unobserved | Name the event, call, navigation or client branch needed; missing browser-only proof may require `browser-required`. |
+| Enforced CSP or embedding restriction | Establish that it applies to this unit; report-only is not enforcement. Do not infer an upstream block or bypass it. |
+| HTTP cannot distinguish the possibilities | State the missing fact and whether another permitted HTTP observation can resolve it; otherwise select the applicable unresolved outcome. |
+
+Identify any changed bytes and why the effective code or execution mechanism fails.
+When a useful in-scope hypothesis remains within permissions and budget, adapt the
+harmless marker to that evidence,
+predict the returned structure/effective code and confirmation conditions before
+sending, then apply this entire checkpoint to the new observation. Changing tags
+alone does not repair an expression broken by the same transformation. Preserve
+failed variants as adverse evidence. Do not demand another probe when evidence
+already suffices or no useful authorized test remains; do not spray variants or
+bypass an upstream control. An invalid variant alone is neither `confirmed` nor
+`not-confirmed`: unresolved syntax/interpretation or absent usable proof is
+`insufficient-evidence`; a viable path with necessary unavailable browser proof is
+`browser-required`. A negative still needs a completed bounded test and evidence
+adequately ruling out its relevant hypothesis, not one failed payload.
 
 Interpret the result according to the observed context:
 
@@ -597,6 +677,12 @@ Interpret the result according to the observed context:
 - Never claim browser execution solely because a payload string appears in
   an HTTP response when the observed context does not make execution
   deterministic from that response alone.
+
+For `browser-required`, name the specific missing browser-only fact (such as a
+trigger or client-side branch). A `js-string` label or browser absence alone does
+not settle a question that an available permitted HTTP test can discriminate.
+Use such a test when useful; do not require extra HTTP when only unavailable
+browser behavior remains or sufficient evidence already exists.
 
 Keep the proof non-destructive and scoped to your own session:
 
@@ -665,9 +751,9 @@ application logic, record the candidate as `blocked`.
 Do not classify an ordinary application response such as a normal `401` or
 `403` as `blocked` merely from the status code. There must be evidence that
 an upstream control intercepted the request before application handling —
-otherwise it is an application-level response and should be evaluated as
-such (e.g. `not-confirmed`, or worth noting separately if it suggests an
-access-control issue outside this skill's scope).
+otherwise evaluate the application response under the context and bounded-negative
+rules. Missing required authentication or a login page does not test the claimed
+rendering path; report that limitation rather than close the XSS hypothesis.
 
 Do not retry blocked probes with encoding tricks, alternate payloads, or
 filter-bypass techniques. That is outside this skill's scope.
@@ -722,6 +808,15 @@ needed by the claimed executable syntax. Compare the returned syntax with the
 request; do not substitute the intended payload or an LLM-reconstructed HTML
 element for the captured response. An incomplete executable payload must not
 be confirmed merely from raw reflection in text/html.
+Revisit step 3's returned-code trace here: a complete element with invalid
+effective JavaScript is also inadmissible as confirmation proof. Evidence
+registration checks provenance/integrity, not the correctness of this XSS
+assessment; the Agent must reconcile syntax, trigger and policy before submission.
+Raw response excerpts must preserve the retained observation representation,
+including HTML entities, backslashes and existing redaction. Copy from the owned
+observation; do not silently replace entities with decoded characters or reconstruct
+source from the intended payload. Label any decoded/effective-code representation
+separately as analysis, alongside its raw excerpt and observation ID.
 
 For example, a complete, untruncated response ending in
 `<script>document.title='proof'</script` lacks the final `>`. Do not call it a
@@ -735,8 +830,10 @@ and proof conditions hold; a browser is not universally required.
 
 Keep a compact observation ledger linking detection marker, execution marker
 and adaptations actually tested to their effective requests, observation
-IDs, HTTP statuses, body excerpts and capture flags. The runtime HTTP evidence
-envelope supplies a redacted effective request preview; if
+IDs, HTTP statuses, body excerpts and capture flags. In existing assessment/notes,
+record the original sink, parser path, transformations and which hypotheses were
+ruled out or remain unresolved; structural injection is not observed execution.
+The runtime HTTP evidence envelope supplies a redacted effective request preview; if
 `request_preview_complete: false`, unseen request text remains unknown. Compare
 distinct captured requests before calling a transformation deterministic or
 claiming repetition. Inspect the actual Content-Type, surrounding syntax,
@@ -769,13 +866,18 @@ Every candidate gets exactly one outcome:
   observed context. For ordinary HTML body or attribute contexts, an
   unescaped executable payload can be sufficient when browser parsing is
   deterministic from the response. Contexts that cannot be determined
-  reliably from HTTP-level evidence alone (e.g. JS string context, DOM-based
-  sinks) must be recorded as `browser-required` instead, not
-  as `confirmed`.
+  reliably from HTTP-level evidence alone must be recorded as `browser-required`.
+  A JS-string origin is not itself a veto: apply step 3 to the actual resulting
+  executable unit. Invalid code, inert placement, an unestablished required trigger
+  or an applicable blocking policy cannot satisfy the deterministic HTTP exception.
 - `not-confirmed` — an applicable bounded test completed with usable proof
   adequately ruling out the relevant execution hypothesis in the observed sink,
   including input fully encoded/neutralized there. Inconclusive observations
-  alone do not complete a negative test.
+  alone do not complete a negative test. State the tested scope and why no essential
+  supported hypothesis within it remains unresolved; one failed technique, several
+  equivalent variants, an unobserved execution or a wish to stop is insufficient.
+  Do not require disproving every imaginable XSS vector. Budget/permission limits
+  with essential questions still open require the applicable unresolved outcome.
 - `blocked` — an upstream WAF, rate limiter, CAPTCHA, or equivalent control
   intercepted the probe before application logic could be evaluated (step
   3a); the application itself was never actually tested.
@@ -915,7 +1017,8 @@ scope.
 
 ## Stop conditions
 
-Stop probing a candidate when its bounded testing reaches a recorded outcome.
+Choose the stop reason from the evidence and remaining useful tests before
+recording the outcome; recording a result is not itself a reason to stop probing.
 Accepted terminal work is resolved by the runtime contract above; unresolved
 outcomes stop probing but remain outstanding. Persist required confirmed findings
 and resolve cleanup and coverage before describing validation as complete.

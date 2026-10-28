@@ -88,3 +88,93 @@ def test_local_escaped_literal_acceptance_is_not_controlled_evaluation():
             assert db.execute("SELECT '" + escaped + "'").fetchone() == (value,)
         # Error-free echo is distinct from evaluating the input as SQL.
         assert db.execute('SELECT 7 * 7').fetchone() == (49,)
+
+
+def negative_criteria(loaded_sql):
+    return compact(loaded_sql.split('**Negative-assessment criteria.**', 1)[1]
+                   .split('For a boolean-based confirmed result', 1)[0])
+
+
+def test_loaded_negative_criteria_require_relevant_observations_not_positive_execution(loaded_sql):
+    criteria = negative_criteria(loaded_sql)
+    for requirement in (
+        'assessment.oracle_status: established', 'assessment.oracle_basis',
+        'observation mechanism', 'correct input targeting',
+        'benign controls showing that the application processes that input',
+        'usable response/status/timing evidence', 'capable of revealing the tested behavior',
+        'does not require a positive sqli oracle or proof that an injected sql predicate executed',
+        'not proof of absolute safety', 'exact server-side sql or syntax context is not required',
+        'justify test relevance', 'supported hypotheses', 'coverage and limitations',
+        'an inapplicable technique is a limitation', 'no universal payload count',
+    ):
+        assert requirement in criteria
+
+
+@pytest.mark.parametrize('start,end', [
+    ('## Decision checkpoint', '## Runtime completion contract'),
+    ('## Phase 2: Validation', '### 2a.'),
+    ('### 2a.', '### 2b.'),
+    ('If the negative-assessment criteria are met', '## Phase 3:'),
+    ('## Recording the result', '### Closing an inconclusive attempt'),
+])
+def test_loaded_negative_entrypoints_use_the_same_assessment_criteria(loaded_sql, start, end):
+    section = compact(loaded_sql.split(start, 1)[1].split(end, 1)[0])
+    # The conclusion paragraph's opening contains the reference itself.
+    assert 'negative-assessment criteria' in compact(start) + ' ' + section
+    assert 'insufficient-evidence' in section or 'inconclusive' in section
+
+
+@pytest.mark.parametrize('limitation', [
+    'malformed', 'irrelevant', 'weak controls', 'unobservable effects',
+    'incomplete testing', 'unresolved parser sensitivity',
+])
+def test_loaded_negative_criteria_preserve_inadequate_testing_as_unresolved(loaded_sql, limitation):
+    criteria = negative_criteria(loaded_sql)
+    assert limitation in criteria
+    assert 'require `insufficient-evidence` when they prevent this assessment' in criteria
+    assert 'a baseline alone or a few generic payloads with unchanged responses is insufficient' in criteria
+
+
+def test_loaded_outcomes_do_not_require_exact_context_or_treat_parser_errors_as_confirmation(loaded_sql):
+    outcomes = compact(loaded_sql.split('## Recording the result', 1)[1]
+                       .split('### Closing an inconclusive attempt', 1)[0])
+    assert 'unchanged responses can support this outcome with justified test relevance and controls' in outcomes
+    assert 'without exact sql syntax or proven predicate execution' in outcomes
+    assert 'unresolved parser sensitivity remains' in outcomes
+    assert 'unresolved predicate compatibility or syntax context requires' not in compact(loaded_sql)
+    checkpoint = compact(loaded_sql.split('### Evidence-to-decision checkpoint', 1)[1]
+                         .split('### Standard result entry template', 1)[0])
+    assert 'parser messages alone do not establish sqli-2' in checkpoint
+    assert 'demonstrating controlled sql evaluation rather than merely altered parsing' in checkpoint
+    assert 'not sqli-2 confirmation by themselves' in checkpoint
+
+
+@pytest.mark.parametrize('parameterized', [True, False])
+def test_local_controls_distinguish_bounded_negative_from_repeatable_positive(loaded_sql, parameterized):
+    # Both implementations receive the same controls/probes. This illustrates
+    # the documented distinction locally; it does not test an LLM's judgment.
+    assert 'matching and nonmatching benign inputs' in negative_criteria(loaded_sql)
+    with sqlite3.connect(':memory:') as db:
+        db.execute('CREATE TABLE items(label TEXT)')
+        db.execute('INSERT INTO items VALUES (?)', ('moss',))
+
+        def rows(value):
+            if parameterized:
+                return db.execute('SELECT label FROM items WHERE label=?', (value,)).fetchall()
+            return db.execute("SELECT label FROM items WHERE label='" + value + "'").fetchall()
+
+        assert rows('moss') == [('moss',)]
+        assert rows('birch') == []
+        if parameterized:
+            # Literal handling produces no SQL errors or positive predicate
+            # oracle; calibrated controls still expose the tested row behavior.
+            assert all(rows(value) == [] for value in (
+                "moss'", "moss' AND '1'='1", "moss' AND '1'='2"))
+        else:
+            with pytest.raises(sqlite3.OperationalError):
+                rows("moss'")  # parser sensitivity alone, not confirmation
+            for _ in range(2):
+                assert rows("moss' AND '1'='1") == [('moss',)]
+                assert rows("moss' AND '1'='2") == []
+            # A nonmatching seed hides a real injection from an AND comparison.
+            assert rows("birch' AND '1'='1") == rows("birch' AND '1'='2") == []
