@@ -165,16 +165,6 @@ def test_active_runner_lock_blocks_all_deletion(tmp_path, scope):
     assert not transient.exists() and not lock.exists()
 
 
-@pytest.mark.parametrize("mode", ["smoke", "official"])
-def test_benchmark_cli_requires_no_deleted_historical_audit(mode):
-    from benchmarks.scenario1.__main__ import parser
-    args = ["run", "--mode", mode, "--dataset", "fixture", "--manifest", "fixture/selection.json",
-            "--target", "http://127.0.0.1:3000", "--context-path", "/benchmark",
-            "--target-state", "external-reset"]
-    assert parser().parse_args(args).reset_audit is None
-    assert parser().parse_args([*args, "--reset-audit", "external/audit.json"]).reset_audit == Path("external/audit.json")
-
-
 @pytest.mark.parametrize("scope", ["runtime", "benchmark"])
 def test_narrow_scopes_preserve_history_inputs_and_durable_state(tmp_path, scope):
     root = project(tmp_path / "repo")

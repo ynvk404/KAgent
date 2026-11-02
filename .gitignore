@@ -74,6 +74,10 @@ vulture-100.txt
 /docs/verification-stage3/
 /docs/verification-milestone-c/runs/
 
+# New top-level working notes and audit reports remain local by default.
+# Previously tracked documents remain versioned; use git add -f for exceptions.
+/docs/*.md
+
 # Additional local Python tool environments/caches
 .venv/
 .mypy_cache/

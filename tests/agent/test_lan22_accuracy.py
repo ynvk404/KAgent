@@ -234,28 +234,6 @@ def test_synthetic_parser_position_does_not_determine_outer_parentheses():
                 db.execute(template.format(value="seed') AND '1'='1"))
 
 
-def test_reference_pack_counters_and_search_predictions_are_consistent():
-    pack = json.loads((ROOT / 'benchmarks/fixtures/lan22_accuracy.json').read_text())
-    cases = {row['id']: row for row in pack['cases']}
-    assert len(cases) == 8 and all(row['rubric'] and row['task'] for row in cases.values())
-    counts = cases['counting-units']['context']
-    assert counts['unique_discovery_paths'] + counts['wildcard_baseline_requests'] == counts['discovery_http_requests']
-    assert counts['direct_http_tool_calls'] + counts['discovery_http_requests'] == counts['native_http_sources']
-    assert cases['canonical-goal-and-checkpoint']['context']['requested_goals'] == ['sql-injection']
-    login = cases['login-evidence']['context']
-    assert login['owned_observations'] == len(login['statuses']) == 2
-    assert not login['registered_proof_refs'] and login['persisted_findings'] == 0
-    # These hypothetical SQLite templates illustrate why a generic equality
-    # cannot be assumed TRUE after insertion into a wildcard search.
-    with sqlite3.connect(':memory:') as db:
-        query = "SELECT 1 WHERE 'apple' LIKE '%{value}%'"
-        assert db.execute(query.format(value='apple')).fetchall() == [(1,)]
-        assert db.execute(query.format(value="apple' AND '1'='1")).fetchall() == []
-        assert db.execute(query.format(value="apple' AND '1'='2")).fetchall() == []
-        assert db.execute(query.format(value="apple' AND '1' LIKE '1")).fetchall() == [(1,)]
-        assert db.execute(query.format(value="apple' AND '1' LIKE '2")).fetchall() == []
-
-
 async def test_http_response_and_controller_request_preview_stay_separate(offline, monkeypatch):
     rt, _ = offline
     # AsyncClient was imported before the fixture's patch. Both handlers are

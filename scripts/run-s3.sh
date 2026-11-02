@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# Usage: bash run_kagent_lan.sh 15   (or 16, 17, ...)
+# Usage: bash scripts/run-s3.sh 15   (or 16, 17, ...)
 LAN="${1:-}"
 if [[ ! "$LAN" =~ ^[1-9][0-9]*$ ]]; then
   echo "Usage: bash $0 <run_number>  (e.g. 15, 16, 17)" >&2
