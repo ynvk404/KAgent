@@ -12,25 +12,11 @@ from rich.console import Console
 from src.engagement.state import EngagementState
 from src.permission.permission import AlwaysDeny, Decision, UserControlledRefusal, YoloPrompter
 from src.permission.runtime.execution import ExecutionPolicy, ExecutionReview, current_policy, invocation_digest
-from src.tools.mcp.integration import MCPTool
 from src.tools.common.registry import Registry
 from src.tools.execution.shell import BashTool, ShellTool
 from src.tools.common.outcome import ToolOutput
 from src.ui.bridges.perm_bridge import BridgedPermissionRequest
 from src.ui.widgets.permission_modal import PermissionModal
-
-
-class Session:
-    server_name = "fixture-server"
-    def __init__(self):
-        self.calls = []
-    async def call_tool(self, name, args, cancel_event=None):
-        self.calls.append((name, args))
-        return {"isError": False, "content": []}
-
-
-
-
 
 
 @pytest.mark.asyncio

@@ -673,23 +673,17 @@ def test_session_deny_survives_target_change_until_operator_retry(runtime):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("kind", ["shell", "mcp", "local-read"])
+@pytest.mark.parametrize("kind", ["shell", "local-read"])
 async def test_http_grants_do_not_authorize_other_tools(runtime, tmp_path, monkeypatch, kind):
     from src.tools.execution.shell import ShellTool
-    from src.tools.mcp.integration import MCPTool
     from src.tools.execution.file import FileReadTool
-    from tests.security.test_action_approval import Session
     tool, registry, _, _ = runtime
     tool.permissions.activate(ORIGIN, HTTPLimits())
     subprocess = AsyncMock()
     monkeypatch.setattr("src.tools.execution.shell.run_with_capture", subprocess)
-    remote = Session()
     if kind == "shell":
         other = ShellTool()
         request = {"command": "echo fake-marker"}
-    elif kind == "mcp":
-        other = MCPTool(remote, "mcp_fixture", "operation", "fixture", {})
-        request = {"url": ORIGIN}
     else:
         other = FileReadTool()
         sensitive = tmp_path / ".env"
@@ -699,8 +693,7 @@ async def test_http_grants_do_not_authorize_other_tools(runtime, tmp_path, monke
     operator = Operator()
     with pytest.raises(PermissionError):
         await registry.execute(other.name(), request, None, YoloPrompter(operator, True))
-    assert not remote.calls
-    assert bool(operator.requests) is (kind != "mcp")  # unavailable MCP fails before review
+    assert operator.requests
     subprocess.assert_not_called()
 
 

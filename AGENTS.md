@@ -11,9 +11,11 @@ implicit target.
 
 The runtime is a Python 3.11+ CLI and Textual TUI. `src/cli/main.py` wires the
 agent loop, providers, tool registry, permission bridge, stores, native discovery,
-direct shell, Burp ingest, and local CWE enrichment. Configured command plugins
-and process MCP adapters are unavailable without the retired isolated executor;
-they must not fall back to host execution. The active `Target` is session state
+direct shell, Burp ingest, and local CWE enrichment. The retired process MCP
+client adapter has been removed; legacy MCP configuration is inert. Configured
+command plugins remain unavailable without the retired isolated executor.
+Neither may fall back to host execution. Standalone Browser/Capture MCP servers
+for external clients are independent. The active `Target` is session state
 (`src/target/target.py`); the system prompt directs HTTP work to that base URL,
 but contributors must still preserve scope in tool and workflow changes.
 
@@ -224,7 +226,7 @@ but contributors must still preserve scope in tool and workflow changes.
   `src/tools/common/registry.py`,
   `src/tools/http/private_host.py`, `src/tools/http/http_tool.py`,
   `src/tools/http/web.py`, `src/tools/discovery/`, `src/tools/execution/`,
-  `src/tools/mcp/`, `src/tools/skills/`, and `src/tools/workflow/`.
+  `src/tools/skills/`, and `src/tools/workflow/`.
 
 - Skills, workflow, findings, evidence/artifacts: `src/skills/`,
   `src/workflow/`, `src/findings/`, `src/tools/workflow/finding.py`, `src/coverage/`,

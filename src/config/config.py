@@ -33,6 +33,8 @@ DEFAULT_AUTO_COMPACT_THRESHOLD = 16000
 
 @dataclass
 class MCPServerConfig:
+    """Legacy data only; retained for config round-trips, never executed."""
+
     name: str
     command: str
     args: list[str] = field(default_factory=list)

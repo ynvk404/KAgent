@@ -130,7 +130,7 @@ def plan(repo: Path, home: Path, config: Path, run: Path, origin: str, max_steps
         raise ValueError("extra skill/plugin paths require a separate reviewed profile")
     # Preserve the legacy profile's exact CWE launch-identity allowlist without
     # importing the retired MCP deployment adapter. This only validates stored
-    # configuration; MCP execution still follows the normal runtime gates.
+    # configuration; legacy MCP entries are inert and never executed.
     # Normal isolation profiles retain the operator's configured integrations.
     if legacy_bounded and any(
         server.name != "cwe_catalog"

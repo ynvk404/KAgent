@@ -168,12 +168,13 @@ def test_old_review_cleanup_cannot_clear_new_pending_ticket():
 
 async def test_native_lookup_without_worker_mcp_or_subprocess(scenario, monkeypatch):
     import asyncio
-    from src.tools.mcp.integration import MCPSession
+    import subprocess
     s = scenario
     def forbidden(*args, **kwargs):
         raise AssertionError('no subprocess or MCP transport permitted')
     monkeypatch.setattr(asyncio, 'create_subprocess_exec', forbidden)
-    monkeypatch.setattr(MCPSession, 'open', forbidden)
+    monkeypatch.setattr(asyncio, 'create_subprocess_shell', forbidden)
+    monkeypatch.setattr(subprocess, 'Popen', forbidden)
     assert not hasattr(s.policy, 'worker')
     before = deepcopy(s.policy.workflow.to_dict()) if getattr(s.policy, 'workflow', None) else None
     source = TrustedSource(s.policy)

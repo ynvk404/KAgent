@@ -16,7 +16,6 @@ from src.tools.common.registry import InvalidToolArguments
 from src.tools.execution.file import FileReadTool
 from src.tools.execution.plugin import CommandPluginTool
 from src.tools.execution.shell import ShellTool
-from src.tools.mcp.integration import discover_mcp_tools
 from src.workflow.state import WorkflowObjective
 from tests.helpers.burp_selection import make_runtime
 from tests.helpers.discovery_calls import execute
@@ -108,11 +107,6 @@ async def test_retired_adapters_and_scanner_arguments_never_fallback(tmp_path, m
         await rt.registry.execute('legacy', {}, None, rt.prompter)
     with pytest.raises(ExecutionBlocked, match='unavailable'):
         await CommandPluginTool(PluginConfig(name='legacy', command='python')).run({}, None, rt.prompter)
-    config = MCPServerConfig('custom', 'python', ['-m', 'fixture'])
-    before = deepcopy(config)
-    with pytest.raises(ExecutionBlocked, match='unavailable'):
-        await discover_mcp_tools(config, execution_policy=rt.policy)
-    assert config == before
     spawn.assert_not_called()
 
 
@@ -141,4 +135,3 @@ async def test_cli_keeps_native_and_burp_tools_without_launching_configured_adap
     assert 'unavailable' in err and 'no host fallback' in err
     assert (fixture.cfg.plugins, fixture.cfg.mcp_servers) == profiles
     spawn.assert_not_called()
-    fixture.discover.assert_not_called()

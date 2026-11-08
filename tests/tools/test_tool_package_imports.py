@@ -37,7 +37,6 @@ import pytest
     "src.tools.skills.payloads",
     "src.tools.skills.skill_file",
     "src.tools.skills.paths",
-    "src.tools.mcp.integration",
 ])
 def test_canonical_tool_module_imports(module_name):
     assert importlib.import_module(module_name).__name__ == module_name
@@ -55,7 +54,7 @@ def test_public_tool_reexports_keep_canonical_class_identity(package, implementa
 
 
 def test_tool_packages_and_runtime_leave_mcp_sdk_deferred():
-    # Use a fresh interpreter: other tests legitimately import the MCP adapter.
+    # Standalone Browser/Capture servers still use the SDK; the CLI must not.
     code = """
 import importlib
 import sys

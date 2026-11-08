@@ -83,9 +83,18 @@ Native `service_discovery` checks the active target's effective TCP port;
 `content_discovery` performs bounded same-origin HTTP path discovery. Their
 existing scope, request/rate/timeout limits and provenance remain in force.
 Nmap/ffuf integration, external wordlist catalog, and integrated Browser MCP
-have been removed. Configured command plugins/MCP requiring the old executor
-are unavailable; configuration is retained without launching a host fallback.
+have been removed, including the retired process MCP client adapter.
+Legacy `mcp_servers` entries remain readable and round-trip on save, with their
+existing validation. They are inert: KAgent never connects, discovers/registers
+their tools or launches their commands. Command plugins requiring the old
+executor remain unavailable; neither has a host execution fallback.
 The old `--browser` and `--scanner-wordlist` flags are rejected.
+
+The standalone `src.browser.mcp_server` and `src.browser.capture_mcp` servers
+remain available for external MCP clients to read Browser/Burp captures. They
+are independent of the removed client adapter and still require the MCP SDK.
+Historical MCP tool names remain displayable in saved sessions; their results
+use generic UI diagnostics without decoding MCP content envelopes.
 
 The module entry point is also available for a checkout-based run:
 

@@ -79,16 +79,14 @@ def initializer(binding: str) -> str:
     ('set_source_disposition', 'partial', 'blocked', 'source_limitations', 'source_bounds', 'complete_skill'),
 ])
 async def test_guidance_covers_inline_contract_without_layout_dependency(concepts):
-    from src.permission.permission import AlwaysAllow
+    from src.skills.load_skill import LoadSkillTool
     from src.skills.registry import Registry
-    from src.tools.skills.skill_file import ReadSkillFileTool
-    _, body, path = read_skill()
-    assert 'read_skill_file(skill="web-enumeration", path="source-reference.md")' in body
+    _, _, path = read_skill()
     skills = Registry()
     skills.load_dir(path.parent.parent)
-    reference = await ReadSkillFileTool(skills).run(
-        {'skill': 'web-enumeration', 'path': 'source-reference.md'}, None, AlwaysAllow())
-    body += str(reference)
+    body = await LoadSkillTool(skills).run({'name': 'web-enumeration'})
+    assert 'source-reference.md' not in body
+    assert not (path.parent / 'source-reference.md').exists()
     # Paragraphs may be rewrapped or reformatted; only semantic anchors matter.
     text = ' '.join(body.replace('`', '').lower().split())
     assert all(concept in text for concept in concepts)

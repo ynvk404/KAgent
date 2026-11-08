@@ -181,6 +181,7 @@ async def test_clear_proposals_describe_full_store_effects_before_execution(tmp_
 @pytest.mark.parametrize("tool,summary,detail", [
     ("mcp_fixture", "mcp: fixture/operation", '{"args":{"tail":"UNKNOWN_TAIL"}}'),
     ("mcp_fixture", "mcp: fixture/operation", '{"server": "fixture", INVALID_JSON UNKNOWN_TAIL'),
+    ("mcp_fixture", "mcp: fixture/operation", '{"server":"fixture","executor":"retired","tool":"operation","args":{"tail":"UNKNOWN_TAIL"}}'),
     ("content_discovery", "content discovery: fixture", "CUSTOM_BOUNDARY UNKNOWN_TAIL"),
     ("service_discovery", "service discovery: fixture", "PRIVATE_ADDRESS_REASON UNKNOWN_TAIL"),
     ("file", "read sensitive file: fixture", "path: fixture\nUNKNOWN_WARNING_TAIL"),
@@ -188,6 +189,8 @@ async def test_clear_proposals_describe_full_store_effects_before_execution(tmp_
 def test_unknown_non_native_formats_keep_complete_sanitized_preview(tool, summary, detail):
     request = make_req(tool=tool, summary=summary, detail=detail, no_session_cache=True)
     assert detail in rendered(PermissionModal(request), width=300)
+    if tool.startswith("mcp_"):
+        assert PermissionModal(request)._other_presentation(detail, False) == (summary, detail, False)
 
 
 def test_deep_custom_json_is_preserved_by_metadata_adapter():

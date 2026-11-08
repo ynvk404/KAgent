@@ -300,8 +300,7 @@ python -m pytest tests/agent tests/integration tests/state tests/tools \
   tests/ui/test_presentation_equivalence.py tests/ui/test_slash_handler.py \
   tests/runtime/test_cli_main.py tests/runtime/test_cli_exit_diagnostics.py \
   tests/llm/test_runtime_tool_schema_interop.py \
-  --ignore=tests/integration/test_http_wire_replay.py \
-  --ignore=tests/integration/test_mcp_integration.py -q --tb=short --durations=10
+  --ignore=tests/integration/test_http_wire_replay.py -q --tb=short --durations=10
 
 python -m pytest tests/tools/test_plugin.py tests/integration/test_tool_schema_budget.py \
   -q --tb=short --durations=5

@@ -656,18 +656,21 @@ def loaded_xss():
 
 @pytest.fixture(scope='module')
 def context_traces(loaded_xss):
-    """Worked examples stay accessible through the existing bounded reader."""
+    """The sole corpus delivers the commented examples through bounded pages."""
     import json
     from src.permission.permission import AlwaysAllow
     from src.tools.skills.payloads import ReadPayloadsTool
 
     registry = Registry()
     registry.load_dir(Path(__file__).resolve().parents[2] / 'skills')
-    assert 'file="context-reasoning.md"' in loaded_xss
+    assert 'XSS context contrasts' in loaded_xss and 'file="payloads.txt"' in loaded_xss
+    assert 'context-reasoning.md' not in loaded_xss
 
     async def read():
         reader = ReadPayloadsTool(registry)
-        args = {'skill': 'cross-site-scripting', 'file': 'context-reasoning.md', 'limit': 13}
+        listed = await reader.run({'skill': 'cross-site-scripting', 'action': 'list'}, None, AlwaysAllow())
+        assert json.loads(listed) == ['payloads.txt']
+        args = {'skill': 'cross-site-scripting', 'file': 'payloads.txt', 'limit': 13}
         chunks = []
         while True:
             output = await reader.run(args, None, AlwaysAllow())
@@ -680,8 +683,12 @@ def context_traces(loaded_xss):
 
     text = asyncio.run(read())
     assert text == (Path(__file__).resolve().parents[2] / 'skills' / 'cross-site-scripting' /
-                    'payloads' / 'context-reasoning.md').read_text(encoding='utf-8')
-    return text
+                    'payloads.txt').read_text(encoding='utf-8')
+    examples = text.split('# --- XSS context contrasts: synthetic source and responses ---\n', 1)[1]
+    # Examples remain comments, distinct from the corpus's executable inputs.
+    assert all(line.startswith('#') for line in examples.splitlines())
+    return ''.join(line[2:] if line.startswith('# ') else line[1:]
+                   for line in examples.splitlines(keepends=True))
 
 
 class SourceTokens(HTMLParser):

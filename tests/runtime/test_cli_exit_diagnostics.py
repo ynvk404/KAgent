@@ -25,9 +25,7 @@ async def offline_cli(tmp_path, monkeypatch):
     cfg = Config(backend=Backend.DEEPSEEK, model="fake-model")
     client = FakeClient([])
     debug_path = tmp_path / "session.jsonl"
-    session = SimpleNamespace(close=AsyncMock())
     probe = AsyncMock(return_value=ProbeResult("yes"))
-    discover = AsyncMock(return_value={"session": session, "tools": []})
     intelligence = cli.IntelligenceStore(cwd=tmp_path, home=tmp_path / "home")
     memory = cli.MemoryStore(cwd=str(tmp_path), home=str(tmp_path / "home"))
     engagement = cli.EngagementStore(cwd=tmp_path, home=tmp_path / "home")
@@ -45,10 +43,9 @@ async def offline_cli(tmp_path, monkeypatch):
     monkeypatch.setattr(cli.session_store, "dir_from_path", lambda _: tmp_path / "sessions")
     monkeypatch.setattr(cli.session_store, "new_id", lambda: "exit-diagnostics-session")
     monkeypatch.setattr(cli, "probe_tool_support", probe)
-    monkeypatch.setattr("src.tools.mcp.integration.discover_mcp_tools", discover)
     monkeypatch.setattr(asyncio.get_running_loop(), "add_signal_handler", lambda *args: None)
     return SimpleNamespace(cli=cli, cfg=cfg, client=client, debug_path=debug_path,
-                           session=session, probe=probe, discover=discover)
+                           probe=probe)
 
 
 @pytest.mark.parametrize("rights_flags", [
@@ -122,11 +119,6 @@ async def test_exit_diagnostics_are_opt_in_and_preserve_permissions(
     assert output.out == output.err == ""
     assert offline_cli.client.requests == []
     offline_cli.probe.assert_awaited_once()
-    if "--browser" in rights_flags:
-        offline_cli.discover.assert_awaited_once()
-        offline_cli.session.close.assert_awaited_once()
-    else:
-        offline_cli.discover.assert_not_awaited()
     if debug_mode == "off":
         assert not offline_cli.debug_path.exists()
     else:

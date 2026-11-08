@@ -18,7 +18,6 @@ tests/security/test_evidence_source_binding.py
 tests/security/test_shell_capture_contract.py
 tests/security/test_shell_signal_contract.py
 tests/security/test_shell_descendant_cleanup.py
-tests/tools/test_tools_mcp_server.py
 tests/cwe
 tests/state
 tests/data

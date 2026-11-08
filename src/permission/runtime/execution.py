@@ -224,11 +224,10 @@ class ExecutionPolicy:
             resolved.is_relative_to(self.root / "cwe-mcp-deployment")
             or resolved.is_relative_to(Path(__file__).resolve().parents[3] / "components")
         ):
-            # The controller imports the reviewed wire contract; the isolated
-            # server executes its audited deployment. Model file tools cannot
-            # replace either trust anchor, even with a one-shot approval/YOLO.
-            # Explicit external setup/maintenance still owns these files. This
-            # adds no mounts, network rights or general MCP permission changes.
+            # The controller imports the reviewed local catalog contract and
+            # reads pinned deployment data. Model file tools cannot replace
+            # either trust anchor, even with a one-shot approval/YOLO.
+            # Explicit external setup/maintenance still owns these files.
             raise ExecutionBlocked("blocked: CWE adapter control-plane; use explicit setup maintenance")
         if resolved.exists():
             kind = resolved.stat().st_mode
@@ -276,7 +275,7 @@ class ExecutionPolicy:
         name = tool.name()
         if self.generic_validation is not None and type(tool).__module__ in {
                 "src.tools.http.http_tool", "src.tools.http.web", "src.tools.execution.shell",
-                "src.tools.execution.plugin", "src.tools.mcp.integration",
+                "src.tools.execution.plugin",
                 "src.tools.discovery.content", "src.tools.discovery.service"}:
             boundary = self.generic_validation
             attempt = boundary.state.attempts.get(boundary.durable_attempt, {})
@@ -290,7 +289,7 @@ class ExecutionPolicy:
         if "*" in self.revoked or name in self.revoked:
             raise ExecutionBlocked("blocked: tool/session-revoked")
         module = type(tool).__module__
-        if module in {'src.tools.mcp.integration', 'src.tools.execution.plugin'}:
+        if module == 'src.tools.execution.plugin':
             raise ExecutionBlocked('unavailable: this adapter requires the removed isolated executor; host execution is not enabled')
         if module == 'src.tools.execution.shell' and 'scanner' in args:
             raise ExecutionBlocked('unavailable: external scanner jobs have been removed')
@@ -298,7 +297,7 @@ class ExecutionPolicy:
                           "src.tools.discovery.content", "src.tools.discovery.service", "src.tools.workflow.workflow_tool",
                           "src.tools.workflow.finding", "src.tools.workflow.coverage", "src.tools.skills.payloads", "src.tools.skills.skill_file",
                           "src.tools.skills.paths", "src.tools.common.ask", "src.tools.common.browser_capture", "src.skills.load_skill",
-                          "src.tools.execution.shell", "src.tools.execution.plugin", "src.tools.mcp.integration", "src.tools.common.permission_status",
+                          "src.tools.execution.shell", "src.tools.execution.plugin", "src.tools.common.permission_status",
                           "src.tools.common.tool_result"}:
             raise ExecutionBlocked("blocked: enforcement-unavailable; unregistered capability adapter")
         if module == "src.tools.common.tool_result":
@@ -407,7 +406,7 @@ class ExecutionPolicy:
         # adapters to the owner so disposition cannot race an admitted action.
         if self.generic_validation is not None and type(tool).__module__ in {
                 "src.tools.http.http_tool",
-                "src.tools.execution.shell", "src.tools.execution.plugin", "src.tools.mcp.integration",
+                "src.tools.execution.shell", "src.tools.execution.plugin",
                 "src.tools.discovery.content", "src.tools.discovery.service", "src.tools.http.web"}:
             from src.workflow.assessment import source_owner, invalidate_effect_declaration
             owner = source_owner(self)

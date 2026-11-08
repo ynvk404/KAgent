@@ -8,7 +8,7 @@ import httpx
 import pytest
 from typing import Any, cast
 
-from src.config.config import MCPServerConfig, PluginConfig
+from src.config.config import PluginConfig
 
 from src.engagement.state import EngagementState
 from src.permission.network.grants import CaptureSource, HTTPBlocked, HTTPReviewTicket, HTTPLimits
@@ -21,7 +21,6 @@ from src.tools.common.registry import Registry
 from src.tools.execution.file import FileReadTool, FileWriteTool, FileWriteToolAlias, FileEditTool, FileEditToolAlias
 from src.tools.execution.shell import ShellTool
 from src.tools.execution.plugin import CommandPluginTool
-from src.tools.mcp.integration import MCPTool, MCPSession
 from src.tools.http.http_tool import HTTPTool
 from src.tools.http.private_host import gate_private_request
 from src.ui.bridges.perm_bridge import BridgedPrompter

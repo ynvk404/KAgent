@@ -14,8 +14,6 @@ import pytest
 from src.browser import mcp_server, server
 from src.browser.store import CaptureStore
 from src.findings.store import Store as FindingsStore
-from src.config.config import MCPServerConfig
-from src.tools.mcp import integration as mcp_client
 from src.tools.workflow.finding import ConfirmFindingTool
 from tests.helpers.agent_fakes import FakeSignal
 from tests.integration.test_burp_selection import burp_ingest, runtime  # noqa: F401

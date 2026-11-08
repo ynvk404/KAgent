@@ -4,7 +4,6 @@ import asyncio
 from dataclasses import replace
 from pathlib import Path
 from unittest.mock import AsyncMock
-from typing import Any, cast
 
 import httpx
 import pytest
@@ -21,7 +20,6 @@ from src.tools.http.web import WebFetchTool, WebSearchTool, clear_web_cache
 from src.tools.execution.file import FileReadTool, FileWriteTool
 from src.tools.execution.shell import ShellTool
 from src.tools.execution.plugin import CommandPluginTool
-from src.tools.mcp.integration import MCPTool
 from src.tools.discovery.content import ContentDiscoveryTool
 from src.tools.discovery.service import ServiceDiscoveryTool
 from src.config.config import PluginConfig
@@ -276,15 +274,12 @@ def test_receipt_replay_expiry_and_changed_args(runtime, tmp_path):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("kind", ["plugin", "mcp"])
-async def test_missing_process_enforcement_blocks_before_dialog_and_direct_dispatch(runtime, monkeypatch, kind):
+async def test_missing_process_enforcement_blocks_before_dialog_and_direct_dispatch(runtime, monkeypatch):
     registry, p, _, operator, _, _, _ = runtime
     dispatch = AsyncMock()
     monkeypatch.setattr("src.tools.execution.shell.run_with_capture", dispatch)
     monkeypatch.setattr("src.tools.execution.plugin.run_plugin", dispatch)
-    session = type("Session", (), {"call_tool": dispatch, "server_name": "fixture"})()
-    tool = {"shell": ShellTool(), "plugin": CommandPluginTool(PluginConfig(name="fixture", command="fixture")),
-            "mcp": MCPTool(cast(Any, session), "fixture_mcp", "operation", "fixture", {})}[kind]
+    tool = CommandPluginTool(PluginConfig(name="fixture", command="fixture"))
     registry.register(tool)
     args = {"command": "printf fixture", "url": ORIGIN}
     for _ in range(2):
@@ -293,6 +288,30 @@ async def test_missing_process_enforcement_blocks_before_dialog_and_direct_dispa
     with pytest.raises(ExecutionBlocked, match="unavailable"):
         await tool.run(args, None, p)
     assert not operator.requests and not dispatch.called
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("module", ["src.tools.mcp.integration", "unregistered.adapter"])
+@pytest.mark.parametrize("yolo", [False, True])
+async def test_removed_and_unknown_adapters_fail_closed_before_review(runtime, module, yolo):
+    registry, prompter, policy, operator, _, _, _ = runtime
+    prompter.set_yolo(yolo)
+    dispatch = AsyncMock()
+    # A stale caller cannot regain execution by registering the removed identity.
+    adapter_type = type("StaleAdapter", (), {
+        "__module__": module,
+        "name": lambda self: "stale_adapter",
+        "requires_permission": lambda self: True,
+        "run": dispatch,
+    })
+    registry.register(adapter_type())
+
+    with pytest.raises(ExecutionBlocked, match="enforcement-unavailable"):
+        await registry.execute("stale_adapter", {}, None, prompter)
+
+    dispatch.assert_not_called()
+    assert not operator.requests and policy.used == policy.active == 0
+    assert not policy._receipts and not policy._pending
 
 
 @pytest.mark.asyncio

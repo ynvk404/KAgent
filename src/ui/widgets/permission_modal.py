@@ -176,18 +176,13 @@ class PermissionModal:
                 arguments = None
             if isinstance(arguments, dict):
                 return req.summary, detail, True
-        if not (req.tool.startswith("mcp_") or req.tool in {"coverage", "read_tool_result"}):
+        if req.tool not in {"coverage", "read_tool_result"}:
             return req.summary, detail, req.summary == req.tool
         try:
             value = json.loads(detail)
         except (TypeError, ValueError, RecursionError):
             value = None
         if isinstance(value, dict):
-            if (req.tool.startswith("mcp_") and set(value) == {"server", "executor", "tool", "args"}
-                    and isinstance(value["server"], str) and isinstance(value["tool"], str)
-                    and isinstance(value["args"], dict)
-                    and req.summary == f"mcp: {value['server']}/{value['tool']}"):
-                return req.summary, detail, True
             if req.tool == "coverage" and req.no_session_cache and req.summary == "coverage" and value.get("action") == "clear":
                 return "Clear all coverage records", detail, True
             if (req.tool == "read_tool_result" and req.no_session_cache

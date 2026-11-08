@@ -13,6 +13,7 @@ TOOL_DISPLAY_NAMES: dict[str, str] = {
 }
 
 def display_tool_name(name: str) -> str:
+    # Preserve labels when displaying historical sessions from the removed adapter.
     if name.startswith("mcp_browser_browser_"):
         return browser_tool_name(name)
 

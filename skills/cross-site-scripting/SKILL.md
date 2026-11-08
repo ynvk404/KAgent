@@ -537,10 +537,12 @@ with a necessary unobserved browser step remains `browser-required` under step 3
 
 ### Context traces — synthetic source and responses, not session evidence
 
-Optional worked contrasts are available through
-`read_payloads(skill="cross-site-scripting", file="context-reasoning.md")`.
+Optional worked contrasts are included in the `XSS context contrasts` notes
+within Phase 2 of `payloads.txt`, through the same
+`read_payloads(skill="cross-site-scripting", file="payloads.txt")` reader.
 Consult the relevant contrast only when it helps resolve the current parser or
 transformation question; no extra resource read or example sequence is required.
+If the needed notes are clipped, follow the reader's published continuation.
 Use only captured bytes for incomplete observations; name missing context, never
 reconstruct it or use an inadmissible capture as terminal proof. Earlier phases'
 observations can guide planning but do not become owned proof for this attempt.

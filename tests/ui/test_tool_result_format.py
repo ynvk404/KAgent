@@ -53,10 +53,27 @@ def test_unknown_failure_metadata_never_dumps_arbitrary_json():
     assert result_issues(ToolResultEvent(name="unknown", status="partial", result="HIDDEN_PAYLOAD"), None) == ["Unrecognized tool outcome. Review the operation."]
 
 
-def test_mcp_text_envelope_keeps_explicit_warnings_without_dumping_content():
-    event = ToolResultEvent(name="mcp_fixture_action", result='[{"type":"text","text":"Hidden routine output\\nWARNING: cleanup required"}]\n[runtime observation: hidden-id]')
-    assert result_issues(event, None) == ["WARNING: cleanup required"]
-    assert result_issues(ToolResultEvent(name="mcp_fixture_action", result='[{"type":"text","text":"Hidden data\n[... truncated 500 chars ...]'), None) == ["MCP output truncated. Omitted output may limit validation."]
+@pytest.mark.parametrize("name", ["fixture", "mcp_fixture_action"])
+def test_generic_notices_keep_warnings_failure_and_truncation_metadata(name):
+    event = ToolResultEvent(name=name, result="Hidden routine output\nWARNING: cleanup required\nWarning: review limits",
+                            truncated=True)
+    original = deepcopy(event)
+    issues = result_issues(event, None)
+    assert issues == ["WARNING: cleanup required", "Warning: review limits",
+                      "Tool output truncated. Omitted output may limit validation."]
+    assert all(issue_category(issue, event) == "diagnostic" for issue in issues)
+    assert event == original
+    event.status, event.error_kind, event.err = "error", "policy_block", "Adapter unavailable"
+    assert result_issues(event, None) == [event.err, *issues]
+
+
+def test_historical_mcp_envelopes_are_opaque_to_admission():
+    event = ToolResultEvent(name="mcp_fixture_action", result=json.dumps([
+        {"type": "text", "text": "Hidden output\nERROR: untrusted\nWARNING: embedded text"}
+    ]))
+    assert result_issues(event, None) == []
+    event.status, event.error_kind = "error", "policy_block"
+    assert result_issues(event, None) == ["policy_block"]
 
 
 @pytest.mark.parametrize("name,result,truncated", [

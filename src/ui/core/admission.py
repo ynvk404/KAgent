@@ -95,7 +95,7 @@ def issue_category(text: str, ev: ToolResultEvent) -> str:
         return "export"
     if text.startswith(("Validation ", "Cleanup ", "Coverage synchronization")):
         return "incomplete"
-    if text.startswith(("WARNING:", "Warning:", "Shell stderr:", "Tool output truncated", "MCP output truncated",
+    if text.startswith(("WARNING:", "Warning:", "Shell stderr:", "Tool output truncated",
                         "Response body truncated", "Last response body truncated")):
         return "diagnostic"
     if ev.status == "cancelled" or ev.error_kind == "cancelled":
@@ -152,19 +152,7 @@ def result_issues(ev: ToolResultEvent, call: PendingCall | None) -> list[str]:
     if not shell and not issues and ev.result.lower().startswith("error:"):
         issues.append(ev.result.splitlines()[0].partition(":")[2].strip())
     if ev.name not in {"http", "shell", "bash", "BashTool"}:
-        notice_text = ev.result
-        if ev.name.startswith("mcp_"):
-            try:
-                content, _ = json.JSONDecoder().raw_decode(ev.result.lstrip())
-            except (ValueError, TypeError):
-                pass
-            else:
-                from src.tools.mcp.integration import extract_mcp_text
-                notice_text = extract_mcp_text(content)
-            if re.search(r"\[\.\.\. truncated \d+ chars \.\.\.\]", ev.result):
-                issues.append("MCP output truncated. Omitted output may limit validation.")
-            issues.extend(line for line in notice_text.splitlines() if line.startswith("ERROR:"))
-        issues.extend(line for line in notice_text.splitlines()
+        issues.extend(line for line in ev.result.splitlines()
                       if line.startswith(("WARNING:", "Warning:")) and line not in issues)
     if ev.truncated:
         if ev.name == "http":
