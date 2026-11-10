@@ -7,11 +7,15 @@ import ipaddress
 import json
 import socket
 import time
-from typing import Any
+import uuid
+from dataclasses import dataclass
+from typing import Any, Callable
 from urllib.parse import urlsplit
 
 from src.engagement.state import EngagementState, OutOfScopeError
-from src.permission.permission import Decision, PermissionRequest, Prompter, UserControlledRefusal
+from src.permission.permission import (
+    Decision, PermissionRequest, Prompter, UserControlledRefusal,
+)
 from src.target.origin import HTTPOrigin
 from src.target.target import Target
 from src.tools.discovery.common import is_aborted, normalize_host, validate_ports
@@ -20,6 +24,8 @@ from src.tools.http.private_host import private_host_reason
 from src.tools.common.types import PermissionHints, Tool
 from src.workflow.state import WorkflowState
 from src.workflow.ownership import WorkflowOwner
+from src.permission.runtime.execution import ExecutionBlocked
+from src.permission.runtime.invocations import REVIEW_TIMEOUT_SECONDS
 
 
 DEFAULT_TIMEOUT_SECONDS = 20
@@ -27,6 +33,16 @@ MAX_TIMEOUT_SECONDS = 120
 MAX_PORTS = 100
 MAX_CONCURRENCY = 16
 MAX_RESOLVED_ADDRESSES = 16
+
+
+class MissingTCPScopeError(OutOfScopeError):
+    """Native-only structured context; the existing error text stays compatible."""
+
+    def __init__(self, message: str, origin: HTTPOrigin, address: str, ports: tuple[int, ...]):
+        super().__init__(message)
+        self.origin = origin
+        self.address = address
+        self.ports = tuple(sorted(ports))
 
 
 class ServiceDiscoveryTool(Tool):
@@ -46,13 +62,14 @@ class ServiceDiscoveryTool(Tool):
 
     def description(self) -> str:
         return (
-            "Check the active target HTTP port on its active hostname or IP. "
-            "Uses native TCP connections. "
-            "No other ports, CIDR, "
-            "host lists, UDP, NSE scripts, OS detection, or "
-            "raw scanner flags. A scan validated against the declared active "
-            "target is routine reconnaissance and is eligible for YOLO; other "
-            "permission gates remain active."
+            "Check TCP connectivity on the active target hostname or IP. "
+            "Defaults to its HTTP URL's effective port; additional explicit ports "
+            "require numeric-IP TCP scope and operator execution review. "
+            "Uses native TCP connections, at most 100 ports and 16 concurrent checks. "
+            "No other hosts, CIDR, "
+            "host lists, UDP, NSE scripts, OS detection, service version detection, "
+            "or raw scanner flags. Only the default target-port check is "
+            "eligible for automatic YOLO approval; other permission gates remain active."
         )
 
     def schema(self) -> dict[str, Any]:
@@ -68,7 +85,11 @@ class ServiceDiscoveryTool(Tool):
                     "minItems": 1,
                     "maxItems": MAX_PORTS,
                     "items": {"type": "integer", "minimum": 1, "maximum": 65535},
-                    "description": "Optional explicit list; every port must equal the active target URL's effective port.",
+                    "description": (
+                        "Optional TCP port list (duplicates are checked once). Defaults to the active "
+                        "URL's effective port. Every additional port requires /scope tcp-add or a runtime A/B scope review "
+                        "for the selected resolved IP and operator execution review."
+                    ),
                 },
                 "mode": {
                     "type": "string",
@@ -99,6 +120,7 @@ class ServiceDiscoveryTool(Tool):
         try:
             origin, host, ports, mode, timeout = self._parameters(args)
             backend = self._select_backend(mode)
+            default_scan = ports == (origin.port,)
             action = {
                 "active_origin": origin.as_url(),
                 "host": host,
@@ -106,12 +128,16 @@ class ServiceDiscoveryTool(Tool):
                 "backend": backend,
                 "timeout": timeout,
             }
+            if not default_scan:
+                action["tcp_scope_revision"] = self.engagement.revision
             digest = hashlib.sha256(
                 json.dumps(action, sort_keys=True, separators=(",", ":")).encode()
             ).hexdigest()
             return {
-                "riskTier": "routine",
-                "yoloAutoApprove": True,
+                "riskTier": "routine" if default_scan else "bounded-impact",
+                "yoloAutoApprove": default_scan,
+                "forceOperator": not default_scan,
+                "noSessionCache": not default_scan,
                 "cacheKey": f"service-discovery:{digest}",
                 "sessionScopeDisplay": (
                     f"TCP service discovery on {host}, ports {','.join(map(str, ports))} "
@@ -236,6 +262,7 @@ class ServiceDiscoveryTool(Tool):
                 [], "error", "dns_resolution_failed", error_kind="network"
             )
         execution_address = addresses[0]
+        self._require_tcp_scope(origin, execution_address, ports)
 
         address_reasons: list[tuple[str, str]] = []
         for address in addresses:
@@ -268,9 +295,12 @@ class ServiceDiscoveryTool(Tool):
                         f"network scan timeout: {timeout}s (permission wait excluded)\n\n"
                         "The scan will connect only to the selected vetted numeric address, "
                         "not resolve the hostname again. Approve only if this exact "
-                        "active target and port are within the engagement scope."
+                        "active target and requested ports are within the engagement scope. "
+                        "Execution approval does not add TCP scope."
                     ),
-                    no_session_cache=not declared_target,
+                    no_session_cache=(
+                        not declared_target or permission_hints.get("noSessionCache", False)
+                    ),
                     cache_key=(
                         permission_hints.get("cacheKey") if declared_target else None
                     ),
@@ -279,9 +309,13 @@ class ServiceDiscoveryTool(Tool):
                         if declared_target else None
                     ),
                     risk_tier=(
-                        "routine" if declared_target else "bounded-impact"
+                        permission_hints.get("riskTier", "bounded-impact")
+                        if declared_target else "bounded-impact"
                     ),
-                    yolo_auto_approve=declared_target,
+                    yolo_auto_approve=(
+                        declared_target and permission_hints.get("yoloAutoApprove", False)
+                    ),
+                    force_operator=permission_hints.get("forceOperator", False),
                 ),
                 signal,
             )
@@ -297,6 +331,7 @@ class ServiceDiscoveryTool(Tool):
             )
 
         # Use one deterministic vetted address so execution cannot re-resolve DNS.
+        self._require_tcp_scope(origin, execution_address, ports)
         scan_started = time.monotonic()
         entries, status, reason = await self._scan_sockets(
             execution_address, ports, timeout, signal
@@ -410,10 +445,6 @@ class ServiceDiscoveryTool(Tool):
 
         ports_value = args.get("ports")
         ports = validate_ports(ports_value, (active_origin.port,))
-        if ports != (active_origin.port,):
-            raise ValueError(
-                "service discovery is limited to the active target URL's effective port"
-            )
         mode = args.get("mode", "auto")
         if not isinstance(mode, str) or mode not in {"auto", "socket"}:
             raise ValueError("mode must be auto or socket")
@@ -422,6 +453,19 @@ class ServiceDiscoveryTool(Tool):
             MAX_TIMEOUT_SECONDS, "timeout_seconds",
         )
         return active_origin, host, ports, mode, timeout
+
+    def _require_tcp_scope(
+        self, origin: HTTPOrigin, address: str, ports: tuple[int, ...]
+    ) -> None:
+        additional = tuple(port for port in ports if port != origin.port)
+        if additional and not self.engagement.tcp_allows(address, additional):
+            missing = tuple(port for port in additional if not self.engagement.tcp_allows(address, (port,)))
+            raise MissingTCPScopeError(
+                f"additional TCP ports are outside scope for {address}; "
+                f"use /scope tcp-add {address} {','.join(map(str, additional))} "
+                "to authorize them before execution",
+                origin, address, missing,
+            )
 
     @staticmethod
     def _select_backend(mode: str) -> str:
@@ -649,3 +693,72 @@ class ServiceDiscoveryTool(Tool):
             safe_kind = error_kind if error_kind in {"timeout", "network", "tool_exception"} else "tool_exception"
             return ToolOutput(text, status="error", error_kind=safe_kind)
         return ToolOutput(text, status="observation")
+
+
+@dataclass
+class TCPScopeRequest:
+    id: str
+    origin: str
+    address: str
+    ports: tuple[int, ...]
+    context: tuple
+    expires: float
+    state: str = "pending"
+
+
+class TCPScopeRequests:
+    """Bounded transient state; the controller owns context, UI and mutations.
+
+    Records are created only for structured native failures by the Agent. They
+    confer no execution rights and are never restored from session messages.
+    """
+    def __init__(self, clock: Callable[[], float] = time.monotonic):
+        self.clock = clock
+        self.requests: dict[str, TCPScopeRequest] = {}
+
+    def current(self, request: TCPScopeRequest, context: tuple) -> bool:
+        return (self.clock() < request.expires
+                and self.requests.get(request.id) is request and context == request.context)
+
+    def issue(self, error: MissingTCPScopeError, context: tuple) -> str | None:
+        for request in self.requests.values():
+            if request.context != context or request.address != error.address:
+                continue
+            if (request.state in {"denied", "cancelled", "closed"}
+                    and set(request.ports).intersection(error.ports)):
+                return None
+            if request.ports == error.ports:
+                # Do not turn a decline/cancellation into an equivalent dialog
+                # in the same operator turn, even with a new tool-call ID.
+                return request.id if request.state == "pending" and self.current(request, context) else None
+        if len(self.requests) >= 128:
+            self.requests.pop(next(iter(self.requests)))
+        request_id = "tcp_" + uuid.uuid4().hex
+        self.requests[request_id] = TCPScopeRequest(
+            request_id, error.origin.as_url(), error.address, error.ports,
+            context, self.clock() + REVIEW_TIMEOUT_SECONDS)
+        return request_id
+
+    def claim(self, request_id: str, context: tuple) -> TCPScopeRequest:
+        request = self.requests.get(request_id)
+        if request is None or request.state != "pending" or not self.current(request, context):
+            raise ExecutionBlocked("blocked: TCP scope request is stale, expired, or already used")
+        request.state = "asking"
+        return request
+
+    def decide(self, request: TCPScopeRequest, approve: bool, context: tuple) -> None:
+        if request.state != "asking" or not self.current(request, context):
+            raise ExecutionBlocked("blocked: TCP scope request changed while awaiting the operator")
+        # Consume before the controller mutates scope. Old answers and duplicate
+        # UI events cannot apply this operator decision twice.
+        request.state = "approved" if approve else "denied"
+
+    def updated(self, request: TCPScopeRequest, context: tuple) -> None:
+        if request.state != "approved":
+            raise ExecutionBlocked("blocked: TCP scope request has no operator approval")
+        request.context = context
+        request.state = "updated"
+
+    def close(self, request: TCPScopeRequest, state: str = "closed") -> None:
+        if request.state == "asking":
+            request.state = state

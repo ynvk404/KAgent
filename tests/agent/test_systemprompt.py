@@ -528,3 +528,15 @@ class TestBuildSystemPrompt:
             "WebAuthn / passkey",
         ]:
             assert want in p, f"creative-hunter marker {want} missing"
+
+
+@pytest.mark.parametrize("profile", ["full", "compact"])
+def test_service_discovery_prompt_requires_explicit_tcp_scope_and_review(profile):
+    prompt = build_system_prompt(BuildOptions(
+        skills=Registry(), thinking_enabled=False, target=None, prompt_profile=profile))
+    assert "service_discovery defaults to the active URL port" in prompt
+    assert "numeric-IP TCP scope via /scope tcp-add" in prompt
+    assert "execution review even in YOLO" in prompt
+    assert "never scan all ports by default" in prompt
+    assert "bypass scope with Shell/Nmap loops" in prompt
+    assert "TCP states do not identify service versions or grant HTTP scope" in prompt

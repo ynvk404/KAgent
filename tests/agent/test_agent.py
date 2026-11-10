@@ -2164,6 +2164,8 @@ async def test_accumulates_compaction_observations_without_system_promotion():
     )
 
     agent = result["agent"]
+    # This fixture scripts manual compaction, independently of system prompt size.
+    agent.set_auto_compact_threshold(0)
     seed_compactable_history(agent)
 
     collector = collect()
@@ -2251,6 +2253,8 @@ async def test_restores_carried_observations_without_system_promotion_on_resume(
                 target=Target(),
             )
         )
+        # This fixture scripts manual compaction, independently of system prompt size.
+        first.set_auto_compact_threshold(0)
         seed_compactable_history(first)
 
         collector = collect()

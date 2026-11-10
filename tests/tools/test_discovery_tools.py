@@ -522,8 +522,7 @@ async def test_native_content_timeout_preserves_failure_and_coverage(stage, monk
 def test_service_target_and_ports_are_constrained():
     tool = make_service_tool()
     tool.validate_args({"target": "target.test", "ports": [8080]})
-    with pytest.raises(ValueError, match="effective port"):
-        tool.validate_args({"ports": [80, 8080]})
+    tool.validate_args({"ports": [80, 8080]})  # Scope is checked against the resolved IP before dialing.
     with pytest.raises(ValueError, match="active target"):
         tool.validate_args({"target": "other.test", "ports": [80]})
     with pytest.raises(ValueError, match="query or fragment"):
@@ -534,7 +533,7 @@ def test_service_target_and_ports_are_constrained():
     for target in ("-p80,443", "127.1", "target.test=127.0.0.1"):
         with pytest.raises(ValueError):
             tool.validate_args({"target": target})
-    for ports in ([0], [65536], [True], list(range(1, 102))):
+    for ports in ([], [0], [65536], [True], [80.0], ["80"], list(range(1, 102))):
         with pytest.raises(ValueError):
             tool.validate_args({"ports": ports})
 
@@ -921,3 +920,117 @@ def test_permission_cache_keys_are_action_specific():
     assert service_a.get("riskTier") == "routine"
     assert service_a.get("noSessionCache", False) is False
     assert service.permission_hints({"ports": [8080, 443]}).get("noSessionCache") is True
+
+
+def test_service_port_defaults_deduplication_and_limit():
+    tool = make_service_tool()
+    assert tool._parameters({})[2] == (8080,)
+    assert tool._parameters({"ports": [443, 80, 443, 8080, 80]})[2] == (443, 80, 8080)
+    assert len(tool._parameters({"ports": list(range(1, 101))})[2]) == 100
+    assert tool.permission_hints({"ports": [8080, 8080]}).get("yoloAutoApprove") is True
+    hints = tool.permission_hints({"ports": [80, 8080]})
+    assert hints.get("forceOperator") is True
+    assert hints.get("yoloAutoApprove") is False
+    assert hints.get("noSessionCache") is True
+    assert hints.get("riskTier") == "bounded-impact"
+
+
+@pytest.mark.asyncio
+async def test_service_multiple_ports_report_individual_connection_states(monkeypatch):
+    workflow = make_workflow()
+    tool = make_service_tool(workflow=workflow)
+    tool.engagement.add_tcp("203.0.113.10", "80,443")
+    monkeypatch.setattr("src.tools.discovery.service.private_host_reason", AsyncMock(return_value=""))
+    seen = []
+
+    async def connect(host, port):
+        seen.append((host, port))
+        if port == 80:
+            raise ConnectionRefusedError()
+        if port == 443:
+            raise asyncio.TimeoutError()
+        return object(), FakeWriter()
+
+    monkeypatch.setattr(asyncio, "open_connection", connect)
+    output = await tool.run({"ports": [8080, 443, 80, 443]}, None, AlwaysAllow())
+    payload = json.loads(output)
+    assert payload["requested_ports"] == [8080, 443, 80]
+    assert payload["ports"] == [
+        {"port": 80, "protocol": "tcp", "state": "closed"},
+        {"port": 443, "protocol": "tcp", "state": "filtered"},
+        {"port": 8080, "protocol": "tcp", "state": "open"},
+    ]
+    assert len(seen) == payload["completed_ports"] == 3
+    assert payload["completed_port_count_exact"] and not payload["truncated"]
+    coverage = workflow.phase_coverage_record("recon", "service_discovery")
+    assert coverage is not None and coverage.status == "performed"
+
+
+@pytest.mark.asyncio
+async def test_multiport_operation_timeout_does_not_attest_completed_coverage(monkeypatch):
+    workflow = make_workflow()
+    tool = make_service_tool(workflow=workflow)
+    tool.engagement.add_tcp("203.0.113.10", "80,443")
+    clock = [0.0]
+    monkeypatch.setattr("src.tools.discovery.service.time", SimpleNamespace(monotonic=lambda: clock[0]))
+    monkeypatch.setattr("src.tools.discovery.service.private_host_reason", AsyncMock(return_value=""))
+    tasks = []
+
+    async def connect(_host, _port):
+        tasks.append(asyncio.current_task())
+        clock[0] = 6.0  # Expire the five-second operation budget while sockets are pending.
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(asyncio, "open_connection", connect)
+    output = await asyncio.wait_for(tool.run(
+        {"ports": [80, 443], "timeout_seconds": 5}, None, AlwaysAllow()), 1)
+    payload = json.loads(output)
+    assert output.status == "error" and output.error_kind == "timeout"
+    assert payload["completed_ports"] == 0 and payload["completed_port_count_exact"]
+    assert len(payload["ports"]) == 2 and all(row["state"] == "unknown" for row in payload["ports"])
+    assert all(task.done() for task in tasks)
+    coverage = workflow.phase_coverage_record("recon", "service_discovery")
+    assert coverage is not None and coverage.status == "failed"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("timeout", [False, True])
+async def test_service_multiport_concurrency_and_timeout_are_bounded(monkeypatch, timeout):
+    tool = make_service_tool()
+    active = peak = 0
+    started, release = asyncio.Event(), asyncio.Event()
+    tasks = []
+
+    async def connect(_host, _port):
+        nonlocal active, peak
+        tasks.append(asyncio.current_task())
+        active += 1
+        peak = max(peak, active)
+        if active == 16:
+            started.set()
+        try:
+            await release.wait()
+            return object(), FakeWriter()
+        finally:
+            active -= 1
+
+    monkeypatch.setattr(asyncio, "open_connection", connect)
+    scan = asyncio.create_task(tool._scan_sockets(
+        "203.0.113.10", tuple(range(1, 101)), 0.05 if timeout else 5, None))
+    try:
+        await asyncio.wait_for(started.wait(), 1)
+        assert active == peak == 16
+        if not timeout:
+            release.set()
+        entries, status, reason = await asyncio.wait_for(scan, 1)
+    finally:
+        scan.cancel()
+        await asyncio.gather(scan, return_exceptions=True)
+    assert peak == 16 and active == 0 and all(task.done() for task in tasks)
+    assert len(entries) == 100 and len({entry["port"] for entry in entries}) == 100
+    if timeout:
+        assert status == "error" and reason == "timeout"
+        assert any(not entry["_completed"] and entry["state"] == "unknown" for entry in entries)
+    else:
+        assert status == "success" and reason is None
+        assert all(entry["_completed"] and entry["state"] == "open" for entry in entries)

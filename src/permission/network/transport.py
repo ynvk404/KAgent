@@ -224,15 +224,21 @@ async def socket_budget(host: str, port: int, signal: Any, origin_url: str):
         yield
         return
     manager = policy.engagement.http_permissions
-    # Existing service adapter verifies active origin and exact target port.
+    # The service adapter pins the active host. Extra ports need explicit TCP
+    # scope for that numeric address, independently of execution approval.
     origin = policy.engagement.require_in_scope(origin_url)
-    if origin.port != port:
-        raise ExecutionBlocked("blocked: socket-port-outside-profile")
+
+    def check_tcp_scope() -> None:
+        if port != origin.port and not policy.engagement.tcp_allows(host, (port,)):
+            raise ExecutionBlocked("blocked: socket-port-outside-tcp-scope")
+
+    check_tcp_scope()
     policy.require_network(origin.as_url())
     key = f"{origin.scheme}://{origin.hostname}:{origin.port}"
     if key in policy.vetted_ips and host not in policy.vetted_ips[key]:
         raise ExecutionBlocked("blocked: socket-address-changed; operator network refresh required")
     policy.vetted_ips.setdefault(key, (host,))
+    # Reuse the active-origin budget; this grants no HTTP rights on extra ports.
     action = EffectiveHTTP("CONNECT", origin.as_url(), (), b"", 0, manager.target_revision,
                            policy.engagement.revision, manager.epoch, f"{host}:{port}")
     receipt = manager.authorize_adapter(action)
@@ -241,6 +247,7 @@ async def socket_budget(host: str, port: int, signal: Any, origin_url: str):
         if not policy.nested_allowed():
             raise ExecutionBlocked("blocked: policy-changed-before-socket")
         policy.require_network(action.url)
+        check_tcp_scope()
         reservation.start()
         yield
     finally:

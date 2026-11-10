@@ -53,8 +53,8 @@ def boundary(monkeypatch):
         budget = rights._budgets[grant.id]
         # Observe the actual socket boundary after admission, without replacing
         # socket_budget/reserve/start or deriving TCP counts from HTTP output.
-        assert budget.active == 1 and budget.used >= 1
-        assert rights._inflight[grant.origin] == 1
+        assert 1 <= budget.active <= budget.limits.concurrency and budget.used >= 1
+        assert rights._inflight[grant.origin] == budget.active
         io.connects.append((host, port))
         io.connection_tasks.append(asyncio.current_task())
         io.connect_started.set()
@@ -205,9 +205,9 @@ async def test_direct_bound_call_without_receipt_cannot_bypass_registry(runtime_
 @pytest.mark.parametrize("args", [
     {"target": "other.test"}, {"target": "http://other.test:8080"},
     {"target": "https://target.test:8080"}, {"target": "http://target.test"},
-    {"ports": [80]}, {"ports": [8080, 8081]}, {"mode": "nmap"},
+    {"target": "127.0.0.2"}, {"mode": "nmap"},
 ])
-async def test_exact_active_origin_and_port_rejected_before_review(runtime_factory, boundary, args):
+async def test_other_target_or_backend_rejected_before_review(runtime_factory, boundary, args):
     runtime = runtime_factory(yolo=True)
     with pytest.raises(InvalidToolArguments):
         await runtime.registry.execute("service_discovery", args, None, runtime.prompter)
@@ -456,9 +456,9 @@ async def test_control_failure_cleans_up_native_fanout(runtime_factory, boundary
     with review_turn():
         token = runtime.policy.start(runtime.policy.prepare(runtime.service, {}), runtime.service, {}, None)
         try:
-            # Exercise the private helper's task cleanup under the real port
-            # gate. Public args still permit only the one active URL port.
-            with pytest.raises(ExecutionBlocked, match="socket-port-outside-profile") as failure:
+            # Even a reviewed invocation cannot connect to an extra port
+            # absent from TCP scope; sibling socket checks must be reaped.
+            with pytest.raises(ExecutionBlocked, match="socket-port-outside-tcp-scope") as failure:
                 await runtime.service._scan_sockets("127.0.0.1", (8080, 8081), 20, None)
         finally:
             runtime.policy.stop(token)
@@ -468,6 +468,159 @@ async def test_control_failure_cleans_up_native_fanout(runtime_factory, boundary
     assert boundary.connects == [("127.0.0.1", 8080)]
     assert runtime.engagement.http_permissions._budgets[runtime.grant.id].used == 1
     assert runtime.workflow.phase_coverage_record("recon", "service_discovery") is None
+    assert_idle(runtime, boundary)
+
+
+@pytest.mark.parametrize("yolo", [False, True])
+@pytest.mark.parametrize("ports", [[80, 443, 8080], [443], [443, 80, 443, 8080]])
+async def test_explicit_tcp_scope_allows_multiport_without_granting_http(
+    runtime_factory, boundary, yolo, ports,
+):
+    from tests.integration.test_burp_selection import slash
+
+    runtime = runtime_factory(yolo=yolo)
+    slash(runtime, "/scope tcp-add 127.0.0.1 80,443")
+    result = await runtime.registry.execute("service_discovery", {"ports": ports}, None, runtime.prompter)
+    payload = json.loads(result)
+    unique = list(dict.fromkeys(ports))
+    assert payload["requested_ports"] == unique
+    assert sorted(boundary.connects) == [("127.0.0.1", port) for port in sorted(unique)]
+    assert payload["completed_ports"] == len(unique) and payload["completed_port_count_exact"]
+    assert all(row["state"] == "open" for row in payload["ports"])
+    assert payload["suggestions_authorized"] is False
+    assert {origin.as_url() for origin in runtime.engagement.allowed_origins} == {ORIGIN}
+    with pytest.raises(OutOfScopeError):
+        runtime.http.prepare({"url": "http://target.test:80/"})
+    assert len(runtime.operator.requests) == 1  # Extended checks are reviewed even in YOLO.
+    request = runtime.operator.requests[0]
+    assert request.force_operator and not request.yolo_auto_approve and request.no_session_cache
+    assert runtime.engagement.http_permissions._budgets[runtime.grant.id].used == len(unique)
+    assert runtime.workflow.phase_coverage_record("recon", "service_discovery").status == "performed"
+    assert boundary.dns == ["target.test"]
+    assert_idle(runtime, boundary)
+
+
+async def test_tcp_scope_does_not_change_default_ports_or_yolo(runtime_factory, boundary):
+    runtime = runtime_factory(yolo=True)
+    runtime.agent.update_tcp_scope("127.0.0.1", "80,443")
+    result = await runtime.registry.execute("service_discovery", {}, None, runtime.prompter)
+    assert json.loads(result)["requested_ports"] == [8080]
+    assert boundary.connects == [("127.0.0.1", 8080)] and not runtime.operator.requests
+    assert_idle(runtime, boundary)
+
+
+@pytest.mark.parametrize("yolo", [False, True])
+@pytest.mark.parametrize("address,granted,ports", [
+    ("127.0.0.1", "80", [8080, 80, 443]),
+    ("127.0.0.2", "80,443", [80, 443]),
+    ("127.0.0.1", "443", [80]),
+])
+async def test_missing_tcp_scope_rejects_entire_scan_before_connect(
+    runtime_factory, boundary, yolo, address, granted, ports,
+):
+    runtime = runtime_factory(yolo=yolo)
+    runtime.agent.update_tcp_scope(address, granted)
+    before = deepcopy(runtime.workflow.to_dict())
+    with pytest.raises(OutOfScopeError, match="/scope tcp-add 127.0.0.1"):
+        await runtime.registry.execute("service_discovery", {"ports": ports}, None, runtime.prompter)
+    assert not boundary.connects and boundary.dns == ["target.test"]
+    assert runtime.engagement.http_permissions._budgets[runtime.grant.id].used == 0
+    assert runtime.workflow.to_dict() == before
+    assert_idle(runtime, boundary)
+
+
+@pytest.mark.parametrize("yolo", [False, True])
+async def test_tcp_scope_does_not_replace_execution_review(runtime_factory, boundary, yolo):
+    runtime = runtime_factory(yolo=yolo)
+    runtime.agent.update_tcp_scope("127.0.0.1", "80,443")
+    runtime.operator.decision = Decision.DENY
+    scope = runtime.engagement.to_dict()
+    with pytest.raises(UserControlledRefusal, match="permission denied"):
+        await runtime.registry.execute("service_discovery", {"ports": [80, 443]}, None, runtime.prompter)
+    assert len(runtime.operator.requests) == 1 and runtime.operator.requests[0].force_operator
+    assert not boundary.dns and not boundary.connects
+    assert runtime.engagement.to_dict() == scope
+    assert_idle(runtime, boundary)
+
+
+@pytest.mark.parametrize("yolo", [False, True])
+async def test_tcp_scope_revoked_during_dns_prevents_all_connections(runtime_factory, boundary, monkeypatch, yolo):
+    runtime = runtime_factory(yolo=yolo)
+    runtime.agent.update_tcp_scope("127.0.0.1", "80,443")
+    resolve = runtime.service._resolve_execution_addresses
+
+    async def revoke_after_resolution(*args):
+        result = await resolve(*args)
+        runtime.engagement.remove_tcp("127.0.0.1", "443")
+        return result
+
+    monkeypatch.setattr(runtime.service, "_resolve_execution_addresses", revoke_after_resolution)
+    with pytest.raises(OutOfScopeError):
+        await runtime.registry.execute("service_discovery", {"ports": [80, 443, 8080]}, None, runtime.prompter)
+    assert not boundary.connects
+    assert runtime.workflow.phase_coverage_record("recon", "service_discovery") is None
+    assert_idle(runtime, boundary)
+
+
+async def test_extended_scan_preserves_pinned_dns_address(runtime_factory, boundary, monkeypatch):
+    runtime = runtime_factory(yolo=True)
+    runtime.agent.update_tcp_scope("127.0.0.1", "80")
+    runtime.agent.update_tcp_scope("127.0.0.2", "80")
+    await runtime.registry.execute("service_discovery", {"ports": [80]}, None, runtime.prompter)
+    monkeypatch.setattr(socket, "getaddrinfo", lambda *_args: [
+        (socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("127.0.0.2", 0))])
+    with pytest.raises(ExecutionBlocked, match="socket-address-changed"):
+        await runtime.registry.execute("service_discovery", {"ports": [80]}, None, runtime.prompter)
+    assert boundary.connects == [("127.0.0.1", 80)]
+    assert_idle(runtime, boundary)
+
+
+async def test_tcp_revoked_after_reservation_cannot_start_socket(runtime_factory, boundary, monkeypatch):
+    runtime = runtime_factory(yolo=True)
+    runtime.agent.update_tcp_scope("127.0.0.1", "80")
+    rights = runtime.engagement.http_permissions
+    reserve = rights.reserve_when_ready
+
+    async def revoke_after_reservation(*args):
+        reservation = await reserve(*args)
+        runtime.engagement.remove_tcp("127.0.0.1", "80")
+        return reservation
+
+    monkeypatch.setattr(rights, "reserve_when_ready", revoke_after_reservation)
+    with pytest.raises(ExecutionBlocked, match="policy-changed-before-socket"):
+        await runtime.registry.execute("service_discovery", {"ports": [80]}, None, runtime.prompter)
+    assert not boundary.connects and rights._budgets[runtime.grant.id].used == 0
+    assert runtime.workflow.phase_coverage_record("recon", "service_discovery") is None
+    assert_idle(runtime, boundary)
+
+
+@pytest.mark.parametrize("cancel", ["signal", "task"])
+async def test_multiport_cancellation_releases_all_socket_reservations(runtime_factory, boundary, cancel):
+    runtime = runtime_factory(yolo=True)
+    runtime.agent.update_tcp_scope("127.0.0.1", "80,443")
+    boundary.connect_wait = asyncio.Event()
+    signal = FakeSignal()
+    invocation = asyncio.create_task(runtime.registry.execute(
+        "service_discovery", {"ports": [80, 443, 8080]}, signal, runtime.prompter))
+    try:
+        await asyncio.wait_for(boundary.connect_started.wait(), 1)
+        if cancel == "signal":
+            signal.aborted = True
+            result = await asyncio.wait_for(invocation, 1)
+            payload = json.loads(result)
+            assert result.status == "cancelled" and payload["completed_ports"] == 0
+            assert payload["requested_ports"] == [80, 443, 8080]
+            assert len(payload["ports"]) == 3 and all(row["state"] == "unknown" for row in payload["ports"])
+            assert runtime.workflow.phase_coverage_record("recon", "service_discovery").status == "cancelled"
+        else:
+            invocation.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await invocation
+            assert runtime.workflow.phase_coverage_record("recon", "service_discovery") is None
+    finally:
+        invocation.cancel()
+        await asyncio.gather(invocation, return_exceptions=True)
+    assert boundary.connect_finished.is_set()
     assert_idle(runtime, boundary)
 
 
@@ -549,8 +702,10 @@ async def test_burp_selected_request_keeps_replay_without_service_discovery(runt
     events = []
     await runtime.agent.run("Test only the selected request for SQL injection", FakeSignal(), events.append)
 
-    assert runtime.agent.client.finished and len(boundary.http) == 1
-    assert boundary.http[0].method == "POST" and boundary.http[0].url.path == "/search"
+    # CaptureAwareClient sends a baseline and one bounded quote probe.
+    assert runtime.agent.client.finished and len(boundary.http) == 2
+    assert all(request.method == "POST" and request.url.path == "/search" for request in boundary.http)
+    assert [json.loads(request.content)["q"] for request in boundary.http] == ["first", "first'"]
     candidate = next(iter(runtime.workflow.candidates.values()))
     assert candidate.baseline_request_ref == selected["baseline_request_ref"]
     assert not boundary.connects

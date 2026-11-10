@@ -73,7 +73,7 @@ def test_recon_frontmatter_contract():
     assert isinstance(frontmatter.get("description"), str)
     assert frontmatter["description"].strip()
     assert frontmatter["allowed-tools"] == [
-        "shell", "http", "service_discovery", "file_write", "workflow"
+        "shell", "http", "service_discovery", "ask_user", "file_write", "workflow"
     ]
     assert frontmatter.get("completion-artifact") == (
         "artifacts/recon/{target}/summary.md"
@@ -124,7 +124,7 @@ def test_recon_only_allows_low_noise_tools():
 
     allowed = set(frontmatter["allowed-tools"])
     assert allowed == {
-        "shell", "http", "service_discovery", "file_write", "workflow"
+        "shell", "http", "service_discovery", "ask_user", "file_write", "workflow"
     }
 
     # The body may mention specialized scanners as things that are forbidden,
@@ -160,7 +160,12 @@ def test_recon_describes_supported_service_backend():
     text = collapse_ws(body)
 
     assert "The semantic tool uses bounded native TCP checks" in text
-    assert "limited to the active URL's effective port" in text
+    assert "defaults to the active URL's effective port" in text
+    assert "/scope tcp-add <ip> <ports>" in text
+    assert "Extended checks require execution review even in YOLO" in text
+    assert "`tcp_scope_request_id`" in text
+    assert "`ask_user` alone" in text
+    assert "not inferred service identities or versions" in text
     assert 'External scanner integration is unavailable' in text
     assert '"scanner": "nmap"' not in text
 

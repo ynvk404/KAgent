@@ -6,6 +6,8 @@ from src.workflow.evidence.recovery import (
 from src.agent.events import Invocation
 from src.agent.scope import runtime_scope
 from src.agent import ownership
+from src.tools.discovery.service import MissingTCPScopeError, ServiceDiscoveryTool, TCPScopeRequests
+from src.tools.common.ask import AskUserTool, TCP_SCOPE_ALLOW, TCP_SCOPE_DENY
 import traceback
 import asyncio
 import hashlib
@@ -800,6 +802,12 @@ class Agent:
         existing_discovery_reader = self.tools.get("read_discovery_source")
         if policy_for(self.prompter) is not None and (existing_discovery_reader is None or type(existing_discovery_reader) is ReadDiscoverySource):
             self.tools = self.tools.scoped_tool("read_discovery_source", ReadDiscoverySource(self))
+        self.tcp_scope_requests = TCPScopeRequests(self._tcp_scope_clock)
+        self._tcp_scope_context_changed = False
+        existing_ask = self.tools.get("ask_user")
+        if type(existing_ask) is AskUserTool:
+            self.tools = self.tools.scoped_tool("ask_user", AskUserTool(
+                existing_ask.prompter, tcp_scope_review=self._ask_tcp_scope))
         self.turn_executed_tool = False
         self._trace_enabled = False
         self._trace_run_id = ""
@@ -3484,8 +3492,86 @@ class Agent:
             self.refresh_scope_context()
         return removed_origin, changed
 
+    def _tcp_scope_clock(self) -> float:
+        from src.permission.runtime.execution import policy_for
+        policy = policy_for(self.prompter)
+        return policy.clock() if policy else time.monotonic()
+
+    def _tcp_scope_context(self) -> tuple:
+        from src.permission.runtime.execution import policy_for
+        policy = policy_for(self.prompter)
+        owner = self._active_turn
+        return (id(self.target), id(self.engagement_state), id(self.workflow), runtime_scope(self),
+                id(self.store), self.store.id if self.store else None,
+                id(policy), policy.stamp() if policy else None, owner,
+                owner.current() if owner is not None else True)
+
+    async def _ask_tcp_scope(self, request_id: str, ask_tool: AskUserTool, signal: Any) -> str:
+        from src.permission.runtime.execution import ExecutionBlocked
+        requests = self.tcp_scope_requests
+        request = requests.claim(request_id, self._tcp_scope_context())
+        question = ask_tool.tcp_scope_question(request)
+        answer = ""
+
+        def current() -> bool:
+            stopped = bool(getattr(signal, "aborted", False)) or getattr(signal, "is_set", lambda: False)()
+            return not stopped and requests.current(request, self._tcp_scope_context())
+
+        def decide(choice: str) -> None:
+            nonlocal answer
+            if not current():
+                raise ExecutionBlocked("blocked: TCP scope request changed while awaiting the operator")
+            if choice not in {TCP_SCOPE_ALLOW, TCP_SCOPE_DENY}:
+                raise ExecutionBlocked("blocked: invalid TCP scope choice")
+            answer = choice
+            requests.decide(request, choice == TCP_SCOPE_ALLOW, self._tcp_scope_context())
+            if choice == TCP_SCOPE_ALLOW:
+                self.update_tcp_scope(request.address, request.ports)
+                requests.updated(request, self._tcp_scope_context())
+                self._tcp_scope_context_changed = True
+
+        def result(saved: bool) -> str:
+            return json.dumps({
+                "answers": [{"question": question.question, "answer": answer}],
+                "tcp_scope": {"request_id": request.id, "status": request.state,
+                              "address": request.address, "ports": list(request.ports),
+                              "session_saved": saved, "execution_approved": False},
+            }, indent=2)
+
+        task = asyncio.create_task(ask_tool.ask_tcp_scope(question, decide, signal))
+        try:
+            while not task.done():
+                if not current():
+                    raise ExecutionBlocked("blocked: TCP scope request changed, expired, or was cancelled")
+                await asyncio.wait({task}, timeout=min(0.05, max(0.0, request.expires - requests.clock())))
+            await task
+            if request.state not in {"updated", "denied"}:
+                from src.permission.permission import OperatorInputUnavailable
+                raise OperatorInputUnavailable("No live operator TCP scope decision was received")
+            saved = False
+            if request.state == "updated":
+                try:
+                    await self.save()
+                    saved = self.store is not None
+                except Exception:
+                    # Match /scope semantics: save failure leaves the operator's
+                    # live scope update in place. Never replay its approval.
+                    saved = False
+            return result(saved)
+        except Exception as error:
+            if str(error) in {"cancelled", "aborted"} and request.state == "asking":
+                requests.close(request, "cancelled")
+                answer = "cancelled"
+                return ToolOutput(result(False), status="cancelled", error_kind="cancelled")
+            raise
+        finally:
+            requests.close(request)
+            if not task.done():
+                task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
     def update_tcp_scope(self, address: str, ports: object = None, *, remove: bool = False) -> bool:
-        """Operator command only; not exposed as an LLM tool."""
+        """Operator action only (command or reviewed callback), never an LLM tool."""
         if self.target.empty():
             raise ValueError("no active engagement")
         changed = (self.engagement_state.remove_tcp(address, ports) if remove
@@ -5799,6 +5885,8 @@ class Agent:
         result = ""
         run_err: Exception | None = None
         discovery_work: tuple[WorkflowState, Candidate, str, str] | None = None
+        scope_context = (self._tcp_scope_context()
+                         if type(self.tools.get(tc.function.name)) is ServiceDiscoveryTool else None)
 
         self.result_retention.refresh_scope()
         retention_generation = self.result_retention.scope["generation"]
@@ -5944,6 +6032,18 @@ class Agent:
         if run_err is not None:
 
             err_str = str(run_err).strip() or type(run_err).__name__
+            if isinstance(run_err, MissingTCPScopeError) and scope_context is not None:
+                native_service = self.tools.get(tc.function.name)
+                if (type(native_service) is ServiceDiscoveryTool and native_service.target is self.target
+                        and native_service.engagement is self.engagement_state
+                        and type(self.tools.get("ask_user")) is AskUserTool
+                        and self._tcp_scope_context() == scope_context and self.target.origin() == run_err.origin):
+                    request_id = self.tcp_scope_requests.issue(run_err, scope_context)
+                    if request_id is not None:
+                        err_str += "\nTCP scope review: " + json.dumps({
+                            "tcp_scope_request_id": request_id, "address": run_err.address,
+                            "ports": list(run_err.ports),
+                        })
 
             result = f"ERROR: {err_str}"
             status = "cancelled" if signal.aborted else "error"
@@ -6361,6 +6461,16 @@ class Agent:
         working.append(tool_msg)
         self._tool_results_unsaved = True
         self.result_retention.remember(tool_msg, parsed.args, res)
+        if self._tcp_scope_context_changed:
+            # Scope changed through the operator callback during this turn; the
+            # request working copy must see the same authoritative state as history.
+            working[:] = ensure_system_prompt([m for m in working if not (
+                m.role == "system" and m.content.startswith(SCOPE_CONTEXT_MARKER))], self.sys_prompt)
+            scope_message = next((m for m in reversed(self.history) if m.role == "system"
+                                  and m.content.startswith(SCOPE_CONTEXT_MARKER)), None)
+            if scope_message is not None:
+                working.append(deepcopy(scope_message))
+            self._tcp_scope_context_changed = False
         # Standalone tool APIs retain their tool-enabled admission/save boundary.
         # The agent loop defers admission until the actual next request is built.
         # UI already received the full sanitized event, which is not counted in

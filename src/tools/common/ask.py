@@ -3,7 +3,10 @@ from __future__ import annotations
 import json
 import hashlib
 from dataclasses import dataclass, field
-from typing import Any, Optional, Protocol
+from typing import Any, Optional, Protocol, TYPE_CHECKING, Awaitable, Callable, runtime_checkable
+
+if TYPE_CHECKING:
+    from src.tools.discovery.service import TCPScopeRequest
 
 from src.permission.permission import Prompter
 from src.tools.common.types import Tool
@@ -23,11 +26,22 @@ class Question:
     input_ids: tuple[str, ...] = ()
     dependency_kind: str | None = None
     dependency_basis: str | None = None
+    tcp_scope_request_id: str | None = None
 
 
 class AskPrompter(Protocol):
 
     async def ask(self, q: Question, signal: Any = None) -> str:
+        ...
+
+
+@runtime_checkable
+class TCPScopePrompter(Protocol):
+    """A frontend must commit only through a live operator event callback."""
+
+    async def ask_tcp_scope(
+        self, q: Question, on_response: Callable[[str], None], signal: Any = None,
+    ) -> str:
         ...
 
 
@@ -39,6 +53,10 @@ class FirstOptionPrompter:
         return q.options[0].label
 
 
+TCP_SCOPE_ALLOW = "A \u2013 Add the displayed TCP scope"
+TCP_SCOPE_DENY = "B \u2013 Do not add TCP scope"
+
+
 AUTHORIZED_TESTING_OPTION = Option(
     label="Authorized testing",
     description="I have permission to test this target.",
@@ -48,8 +66,33 @@ class AskUserTool(Tool):
     def __init__(
         self,
         prompter: AskPrompter,
+        *,
+        tcp_scope_review: Callable[[str, AskUserTool, Any], Awaitable[str]] | None = None,
     ):
         self.prompter = prompter
+        self.tcp_scope_review = tcp_scope_review
+
+    @staticmethod
+    def tcp_scope_question(request: TCPScopeRequest) -> Question:
+        ports = ",".join(map(str, request.ports))
+        return Question(
+            header="TCP scope",
+            question=(f"service_discovery was blocked for {request.origin}.\n"
+                      f"Add TCP scope for IP {request.address}, ports {ports}?\n"
+                      "This adds only the displayed TCP destinations. It does not approve execution "
+                      "or authorize additional HTTP origins. Execution review still applies, including YOLO."),
+            options=[Option(TCP_SCOPE_ALLOW), Option(TCP_SCOPE_DENY)],
+        )
+
+    async def ask_tcp_scope(self, question: Question, on_response: Callable[[str], None], signal: Any) -> str:
+        from src.permission.permission import OperatorInputUnavailable
+
+        if isinstance(self.prompter, TCPScopePrompter):
+            return await self.prompter.ask_tcp_scope(question, on_response, signal)
+        # Keep existing unavailable-input signaling. A string-only answer,
+        # including a synthetic first choice, cannot commit a scope decision.
+        await self.prompter.ask(question, signal)
+        raise OperatorInputUnavailable("TCP scope requires an interactive operator review")
 
     def name(self) -> str:
         return "ask_user"
@@ -78,6 +121,10 @@ class AskUserTool(Tool):
                     "items": {
                         "type": "object",
                         "properties": {
+                            "tcp_scope_request_id": {
+                                "type": "string", "minLength": 36, "maxLength": 36,
+                                "description": "Only an ID returned by a real service_discovery TCP-scope failure. Submit one question with this ID and question text only; runtime supplies the exact A/B review. An operator scope decision does not approve execution.",
+                            },
                             "header": {
                                 "type": "string",
                                 "description": "Optional short label for the question.",
@@ -164,6 +211,19 @@ class AskUserTool(Tool):
         if len(raw) > 4:
             raise ValueError("questions must contain at most 4 questions")
         questions = []
+        scope_items = [item for item in raw if isinstance(item, dict) and "tcp_scope_request_id" in item]
+        if scope_items:
+            if (len(raw) != 1 or set(args) != {"questions"}
+                    or set(scope_items[0]) != {"question", "tcp_scope_request_id"}):
+                raise ValueError("TCP scope review requires one question with only question and tcp_scope_request_id")
+            request_id = scope_items[0]["tcp_scope_request_id"]
+            question = scope_items[0]["question"]
+            if (not isinstance(request_id, str) or len(request_id) != 36
+                    or not request_id.startswith("tcp_")
+                    or any(c not in "0123456789abcdef" for c in request_id[4:])
+                    or not isinstance(question, str) or not question.strip()):
+                raise ValueError("invalid TCP scope review question or request ID")
+            return [Question(question=question, tcp_scope_request_id=request_id)]
 
         for i, item in enumerate(raw):
             if not isinstance(item, dict):
@@ -277,6 +337,10 @@ class AskUserTool(Tool):
         # Parse the entire batch before presenting anything or recording a
         # pending question. A bad later question must not partially ask it.
         questions = self._questions(args)
+        if questions[0].tcp_scope_request_id is not None:
+            if self.tcp_scope_review is None:
+                raise ValueError("TCP scope review is unavailable in this runtime")
+            return await self.tcp_scope_review(questions[0].tcp_scope_request_id, self, signal)
         from src.permission.runtime.execution import policy_for, ExecutionBlocked
         policy = policy_for(prompter)
         # Validate the whole batch before showing its first question. Dependency

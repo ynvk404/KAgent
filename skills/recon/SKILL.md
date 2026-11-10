@@ -28,6 +28,7 @@ allowed-tools:
   - shell
   - http
   - service_discovery
+  - ask_user
   - file_write
   - workflow
 ---
@@ -50,10 +51,22 @@ Choose HTTP, native service discovery or no extra probe from current observation
 External scanner integration is unavailable; do not substitute shell scan loops.
 Do not automatically invoke generic-shell `nmap`, `subfinder`, `httpx`, `ffuf`,
 `gobuster`, `amass` or `assetfinder` for reconnaissance.
-The semantic tool is limited to the active URL's effective port. It resolves
-the target once, checks every resulting address against the private-host policy,
-and pins the scan to a vetted numeric address; do not supply another host or
-port to broaden scope.
+The semantic tool defaults to the active URL's effective port. Use an explicit
+port list only when the operator requests a relevant service survey and has
+authorized each additional port for the selected numeric IP with
+`/scope tcp-add <ip> <ports>` or the runtime A/B review below. TCP scope is not
+execution approval and does not
+authorize additional HTTP origins. Extended checks require execution review even
+in YOLO. Never expand to all host ports by default or use Shell/Nmap scan loops
+to bypass scope. The tool resolves the target once, checks every resulting
+address against the private-host policy, and pins the scan to a vetted numeric
+address; do not supply another host.
+If a real `service_discovery` failure returns `tcp_scope_request_id`, call
+`ask_user` alone with one question containing only `question` and that
+`tcp_scope_request_id`. Runtime displays the exact IP/ports and A/B scope review.
+Retry only after `tcp_scope.status` is `updated`; on denial or cancellation,
+omit those additional ports and report the limitation. Scope consent does not
+approve execution, and the Agent must never invent IDs/answers or add scope itself.
 
 Execution rule: substitute the real target into commands before running them.
 Never write literal placeholders such as `<TARGET>`, `<HOST>`, or `<APEX>`
@@ -221,11 +234,15 @@ because a root route has no web page or API operation.
 ## 2b. Optional bounded service discovery
 
 When the target is a host or IP and the exposed service is unclear, call
-`service_discovery` for the active target URL's effective TCP port. It does not
-accept additional ports or hosts, uses a 20-second default timeout (120-second
-hard cap), and does not use UDP, NSE scripts, OS detection, host ranges, service
-version probes, or raw Nmap flags. An open port may
-suggest an HTTP(S) origin; do not request it or add it to scope automatically.
+`service_discovery` for the active target URL's effective TCP port by default.
+For an operator-requested broader survey, supply only explicit ports whose
+additional TCP scope covers the selected resolved IP. The tool accepts at most
+100 ports with 16 concurrent checks and never accepts another target host.
+It uses a 20-second default timeout (120-second hard cap), and does not use UDP,
+NSE scripts, OS detection, host ranges, service version probes, or raw Nmap flags.
+Report only observed TCP connection states, not inferred service identities or
+versions. An open port may suggest an HTTP(S) origin; do not request it or add
+it to scope automatically.
 If service discovery is not useful or its coverage is already established,
 record a `not_applicable` or `skipped` reason in the phase coverage record.
 

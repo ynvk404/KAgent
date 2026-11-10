@@ -52,6 +52,17 @@ class BridgedAskPrompter(AskPrompter):
             abort_waiter.cancel()
 
     async def ask(self, q: Question, signal: Any = None) -> str:
+        return await self._ask(q, signal)
+
+    async def ask_tcp_scope(
+        self, q: Question, on_response: Callable[[str], None], signal: Any = None,
+    ) -> str:
+        """Only a live operator callback may commit a typed TCP-scope review."""
+        return await self._ask(q, signal, on_response)
+
+    async def _ask(
+        self, q: Question, signal: Any, on_response: Callable[[str], None] | None = None,
+    ) -> str:
         loop = asyncio.get_running_loop()
         future: asyncio.Future[str] = loop.create_future()
 
@@ -62,6 +73,15 @@ class BridgedAskPrompter(AskPrompter):
             raise Exception("aborted")
 
         def resolve(label: str) -> None:
+            if on_response is not None:
+                if future.done():
+                    return
+                try:
+                    on_response(label)
+                except Exception as error:
+                    self._publish(None)
+                    future.set_exception(error)
+                    return
             self._publish(None)
             if not future.done():
                 future.set_result(label)
